@@ -1,0 +1,7 @@
+
+nvs_size=128
+key_storage_size=40
+vendor_specific_size=0
+flash_type=IS25WJ032F
+expected_flash_size_mb=4
+serial_number=auto
