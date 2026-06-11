@@ -71,6 +71,7 @@
                                     <listOptionValue value="${CG_TOOL_INCLUDE_PATH}"/>
                                     <listOptionValue value="${COM_TI_SIMPLELINK_WIFI_SDK_INSTALL_DIR}/source/third_party/tuya/tuya/include"/>
                                     <listOptionValue value="${COM_TI_SIMPLELINK_WIFI_SDK_INSTALL_DIR}/source/third_party/tuya/tuya/utils"/>
+                                    <listOptionValue value="${COM_TI_SIMPLELINK_WIFI_SDK_INSTALL_DIR}/source/third_party/tuya/tuya/interface"/>
                                     <listOptionValue value="${COM_TI_SIMPLELINK_WIFI_SDK_INSTALL_DIR}/source/third_party/tuya/ti_config/port"/>
                                     <listOptionValue value="${COM_TI_SIMPLELINK_WIFI_SDK_INSTALL_DIR}/source/third_party/tuya/ti_config/platform"/>
                                 </option>
