@@ -50,7 +50,7 @@ static void handle_property_set(tuya_mqtt_context_t *context, const char *json)
     if (json == NULL) {
         return;
     }
-    const char *v = strstr(json, "\"upload\"");
+    const char *v = strstr(json, "\"switch\"");
     int on = -1;
     if (v != NULL) {
         v = strchr(v, ':');
@@ -64,7 +64,7 @@ static void handle_property_set(tuya_mqtt_context_t *context, const char *json)
             } else if (strncmp(v, "false", 5) == 0) {
                 on = 0;
             } else {
-                on = (atoi(v) >= 80) ? 1 : 0;
+                on = (atoi(v) >= 1) ? 1 : 0;
             }
         }
     }
@@ -84,7 +84,7 @@ static void on_connected(tuya_mqtt_context_t *context, void *user_data)
      * initial property so the device shows as online with state in Smart Life.
      * DP "upload": integer, range 60..100 (abilityId 101) per this product. */
     tuyalink_thing_data_model_get(context, NULL);
-    tuyalink_thing_property_report(context, NULL, "{\"upload\":{\"value\":80}}");
+    tuyalink_thing_property_report(context, NULL, "{\"switch\":{\"value\":true}}");
 }
 
 static void on_disconnect(tuya_mqtt_context_t *context, void *user_data)

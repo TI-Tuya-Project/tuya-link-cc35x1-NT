@@ -17,11 +17,16 @@
 #ifndef TUYA_CONFIG_H
 #define TUYA_CONFIG_H
 
-#define TUYA_DEVICE_ID      "26d5ae7326ae3b2fadktuo"
-#define TUYA_DEVICE_SECRET  "a2EUBW9T8RT5OWe6"
+// #define TUYA_DEVICE_ID      "26e91ed3721e5b709cqyoh"
+// #define TUYA_DEVICE_SECRET  "mVT47v6YlpVvuk27"
 
 /* Optional, for reference / QR only — not used by tuya_mqtt_connect. */
-#define TUYA_PRODUCT_ID     "udyenonxoxoevnnc"
+// #define TUYA_PRODUCT_ID     "n7m2dxiulimpbmns"
+
+#define TUYA_DEVICE_ID      "260036688bfaca6192zuwm"
+#define TUYA_DEVICE_SECRET  "qhkYChAhhIkSwwP9"
+#define TUYA_PRODUCT_ID     "crycb08pouebtrqe"
+
 
 /* The bundled CA (tuya_cacert.h) is GoDaddy Root G2, which signs Tuya's GLOBAL
  * brokers. Pick the broker for your Cloud project's data center. NOTE:
@@ -30,7 +35,7 @@
  *   Central Europe : m1.tuyaeu.com
  *   Western America: m1.tuyaus.com
  *   India          : m1.tuyain.com */
-#define TUYA_MQTT_HOST      "m1.tuyacn.com"
+#define TUYA_MQTT_HOST      "m1.tuyaeu.com"
 #define TUYA_MQTT_PORT      8883
 
 /* MQTT keepalive (seconds) and per-IO TLS timeout (ms). */
