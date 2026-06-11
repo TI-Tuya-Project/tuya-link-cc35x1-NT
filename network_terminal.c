@@ -1325,15 +1325,6 @@ static void tuya_uart_log_cb(log_Event *ev)
            log_level_string(ev->level), ev->file, ev->line, buf);
 }
 
-/* Strong override of the weak hook in tuya_app_task.c. Drives the board LED
- * (CONFIG_GPIO_LED_0, configured in SysConfig as LED_RED) from cloud DP
- * commands. GPIO is already initialized by Board_init(). */
-void tuya_app_led_set(int on)
-{
-    GPIO_write(CONFIG_GPIO_LED_0, on ? 1 : 0);
-    UART_PRINT("[TUYA] LED -> %s\n\r", on ? "ON" : "OFF");
-}
-
 static void on_ip_acquired(WlanRole_e role, uint32_t address)
 {
     static int s_started = 0;
@@ -1400,6 +1391,16 @@ void *network_terminal_entry(void *args)
 
     /* Output device information to the UART terminal */
     RetVal = DisplayAppBanner(APPLICATION_NAME, APPLICATION_VERSION);
+
+    cmdWlanStartCallback(" ");
+    {
+        osi_Sleep(5);
+    }
+
+    cmdWlanRoleUpStaCallback(" ");
+    {
+        osi_Sleep(2);
+    }
 
     /* Display Network Terminal API commands */
     showAvailableCmd();

@@ -23,9 +23,9 @@
 /* Optional, for reference / QR only — not used by tuya_mqtt_connect. */
 // #define TUYA_PRODUCT_ID     "n7m2dxiulimpbmns"
 
-#define TUYA_DEVICE_ID      "260036688bfaca6192zuwm"
-#define TUYA_DEVICE_SECRET  "qhkYChAhhIkSwwP9"
-#define TUYA_PRODUCT_ID     "crycb08pouebtrqe"
+#define TUYA_DEVICE_ID      "2604ed2c473afa0493gdb0"
+#define TUYA_DEVICE_SECRET  "V5bqINJYnBhRhUEw"
+#define TUYA_PRODUCT_ID     "zql7yvojnnsfyb4q"
 
 
 /* The bundled CA (tuya_cacert.h) is GoDaddy Root G2, which signs Tuya's GLOBAL
@@ -38,8 +38,11 @@
 #define TUYA_MQTT_HOST      "m1.tuyaeu.com"
 #define TUYA_MQTT_PORT      8883
 
-/* MQTT keepalive (seconds) and per-IO TLS timeout (ms). */
+/* MQTT keepalive (seconds) and per-IO TLS timeout (ms). The timeout also caps
+ * how long the service loop blocks in recv when idle, i.e. how soon a queued
+ * button edge is flushed to the cloud. 2000 ms keeps button reports snappy
+ * while leaving ample margin for the broker TCP/TLS connect. */
 #define TUYA_MQTT_KEEPALIVE 100
-#define TUYA_MQTT_TIMEOUT_MS 5000
+#define TUYA_MQTT_TIMEOUT_MS 2000
 
 #endif /* TUYA_CONFIG_H */

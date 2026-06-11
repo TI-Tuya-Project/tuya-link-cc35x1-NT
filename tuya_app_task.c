@@ -7,8 +7,14 @@
  * network_terminal example). Call tuya_app_start() once the IP_EVENT /
  * IPV4_ACQUIRED has fired. This module deliberately does not own Wi-Fi.
  *
- * Reporting: edit on_connected() / the example data point ids to match your
- * product's DP schema on the Tuya platform.
+ * Modular I/O model
+ * -----------------
+ * Two tables map Tuya data points (DPs) to board GPIOs:
+ *   - s_leds[]    : cloud -> board. A boolean DP write drives the LED output.
+ *   - s_buttons[] : board -> cloud. A button level change is reported as a DP.
+ * To add/rename an output or input, edit the table only. The DP `code` strings
+ * MUST match the DP codes defined on the Tuya product, or the cloud will drop
+ * the message.
  */
 #include "tuya_app_task.h"
 #include "tuya_config.h"
@@ -22,11 +28,15 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
+#include <ti/drivers/GPIO.h>
+#include "ti_drivers_config.h"
+
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
-/* Region CA root for the m1.tuya*.com brokers. Provided per-example in the
- * upstream SDK; the data_model demo's copy is reused here. */
+/* Region CA root for the m1.tuya*.com brokers. Deployment-specific copy lives
+ * in the app. */
 #include "tuya_cacert.h"
 
 #define TUYA_APP_TASK_STACK_WORDS  (4096)
@@ -34,44 +44,179 @@
 
 static tuya_mqtt_context_t s_client;
 
-/* Weak default — the application overrides this to drive real board hardware.
- * Kept in the library so the bring-up code links standalone. */
-__attribute__((weak)) void tuya_app_led_set(int on)
+/* ----- DP <-> GPIO mapping (edit these two tables to add/rename I/O) ----- */
+
+/* Outputs: a boolean DP write turns the LED on/off. */
+typedef struct {
+    const char *code;   /* Tuya DP code; must match the product definition */
+    uint_least8_t gpio; /* CONFIG_GPIO_* index from ti_drivers_config.h */
+} led_map_t;
+
+static const led_map_t s_leds[] = {
+    { "led_red",   CONFIG_GPIO_LED_0 },
+    { "led_green", CONFIG_GPIO_LED_1 },
+    { "led_blue",  CONFIG_GPIO_LED_2 },
+};
+#define LED_COUNT (sizeof(s_leds) / sizeof(s_leds[0]))
+
+/* Inputs: sampled by a dedicated fast-polling task (button_poll_task) that runs
+ * independently of the MQTT recv block, so quick presses are caught reliably.
+ * Each debounced change is pushed onto a lock-free ring; the MQTT task drains it
+ * and reports up as a boolean DP. (The CC35XX GPIO driver has no both-edges
+ * interrupt, and single-edge toggling mis-handles fast taps, so we poll.)
+ *
+ * active_low: LaunchPad buttons read 0 when pressed (internal pull-up), so we
+ * invert to report "pressed" as true. */
+#define BTN_Q_LEN        8u                 /* power of two */
+#define BTN_Q_MASK       (BTN_Q_LEN - 1u)
+#define BTN_POLL_MS      10u                /* sample period */
+#define BTN_STABLE_POLLS 2u                 /* consecutive equal samples to accept */
+
+typedef struct {
+    const char *code;
+    uint_least8_t gpio;
+    int active_low;
+    /* SPSC ring: poll task is the sole producer (head), MQTT task the consumer (tail). */
+    volatile uint8_t q[BTN_Q_LEN];
+    volatile uint8_t head;
+    volatile uint8_t tail;
+    int last_logical;                       /* last accepted/reported state */
+    int cand;                               /* candidate state being debounced */
+    uint8_t cand_n;                         /* consecutive samples at cand */
+} button_map_t;
+
+static button_map_t s_buttons[] = {
+    { "button_1", CONFIG_GPIO_BTN_0, 1 },
+    { "button_2", CONFIG_GPIO_BTN_1, 1 },
+};
+#define BUTTON_COUNT (sizeof(s_buttons) / sizeof(s_buttons[0]))
+
+/* ----- Helpers ----- */
+
+/* Read a button's logical (pressed) state: 1 = pressed, 0 = released. */
+static int button_read(const button_map_t *b)
 {
-    TY_LOGI("tuya_app_led_set(%d) [no-op: override in app]", on);
+    int level = GPIO_read(b->gpio);
+    return b->active_low ? (level == 0) : (level != 0);
 }
 
-/* Map an inbound property/set payload to an on/off and drive the LED hook.
- * Boolean DP  -> true/false.
- * Numeric DP  -> on when value >= 80 (works with the demo "upload" 60..100 DP;
- *                add a Boolean DP for a real switch with a clean off state). */
+/* Push a debounced state change onto a button's ring (poll task is sole producer). */
+static void button_enqueue(button_map_t *b, int state)
+{
+    if ((uint8_t)(b->head - b->tail) < BTN_Q_LEN) {
+        b->q[b->head & BTN_Q_MASK] = (uint8_t)state;
+        b->head = (uint8_t)(b->head + 1u);
+    }
+}
+
+/* Dedicated task: sample every BTN_POLL_MS, accept a new state only after it has
+ * held for BTN_STABLE_POLLS samples (debounce), then enqueue the change. Runs
+ * independently of the MQTT recv block so fast presses are not missed. */
+static void button_poll_task(void *arg)
+{
+    (void)arg;
+
+    for (size_t i = 0; i < BUTTON_COUNT; ++i) {
+        button_map_t *b = &s_buttons[i];
+        b->head = 0;
+        b->tail = 0;
+        GPIO_setConfig(b->gpio, GPIO_CFG_IN_PU);
+        b->last_logical = button_read(b);   /* baseline; reported in on_connected */
+        b->cand = b->last_logical;
+        b->cand_n = 0;
+    }
+
+    for (;;) {
+        for (size_t i = 0; i < BUTTON_COUNT; ++i) {
+            button_map_t *b = &s_buttons[i];
+            int s = button_read(b);
+            if (s != b->cand) {
+                b->cand = s;
+                b->cand_n = 1;
+            } else if (b->cand_n < BTN_STABLE_POLLS) {
+                if (++b->cand_n >= BTN_STABLE_POLLS && s != b->last_logical) {
+                    b->last_logical = s;
+                    button_enqueue(b, s);
+                }
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(BTN_POLL_MS));
+    }
+}
+
+/* Start the button sampling task. GPIO is already initialized by Board_init(). */
+static void buttons_start(void)
+{
+    xTaskCreate(button_poll_task, "tuya_btn", 512, NULL,
+                TUYA_APP_TASK_PRIORITY, NULL);
+}
+
+/* Parse a flat boolean DP out of an inbound property/set payload, e.g.
+ * {"led_red":true} or {"led_red":1}. Returns 1 if `code` was found and writes
+ * the value to *on; returns 0 if absent. */
+static int parse_bool_dp(const char *json, const char *code, int *on)
+{
+    char needle[64];
+    snprintf(needle, sizeof(needle), "\"%s\"", code);
+    const char *v = strstr(json, needle);
+    if (v == NULL) {
+        return 0;
+    }
+    v = strchr(v, ':');
+    if (v == NULL) {
+        return 0;
+    }
+    ++v;
+    while (*v == ' ' || *v == '\t') {
+        ++v;
+    }
+    if (strncmp(v, "true", 4) == 0) {
+        *on = 1;
+    } else if (strncmp(v, "false", 5) == 0) {
+        *on = 0;
+    } else {
+        *on = (atoi(v) >= 1) ? 1 : 0;
+    }
+    return 1;
+}
+
+/* Report one boolean DP up to the cloud: {"<code>":{"value":<bool>}}. */
+static void report_bool_dp(tuya_mqtt_context_t *context, const char *code, int on)
+{
+    char payload[96];
+    snprintf(payload, sizeof(payload), "{\"%s\":{\"value\":%s}}",
+             code, on ? "true" : "false");
+    tuyalink_thing_property_report(context, NULL, payload);
+}
+
+/* ----- Cloud -> board: apply an inbound property/set payload ----- */
 static void handle_property_set(tuya_mqtt_context_t *context, const char *json)
 {
     if (json == NULL) {
         return;
     }
-    const char *v = strstr(json, "\"switch\"");
-    int on = -1;
-    if (v != NULL) {
-        v = strchr(v, ':');
-        if (v != NULL) {
-            ++v;
-            while (*v == ' ' || *v == '\t') {
-                ++v;
-            }
-            if (strncmp(v, "true", 4) == 0) {
-                on = 1;
-            } else if (strncmp(v, "false", 5) == 0) {
-                on = 0;
-            } else {
-                on = (atoi(v) >= 1) ? 1 : 0;
-            }
+    for (size_t i = 0; i < LED_COUNT; ++i) {
+        int on;
+        if (parse_bool_dp(json, s_leds[i].code, &on)) {
+            GPIO_write(s_leds[i].gpio, on ? CONFIG_GPIO_LED_ON : CONFIG_GPIO_LED_OFF);
+            TY_LOGI("LED %s -> %s", s_leds[i].code, on ? "ON" : "OFF");
+            /* Echo state back so the app panel stays in sync. */
+            report_bool_dp(context, s_leds[i].code, on);
         }
     }
-    if (on >= 0) {
-        tuya_app_led_set(on);
-        /* Echo the new state back so the app panel stays in sync. */
-        tuyalink_thing_property_report(context, NULL, json);
+}
+
+/* ----- board -> cloud: drain queued button edges and report them ----- */
+static void drain_buttons(tuya_mqtt_context_t *context)
+{
+    for (size_t i = 0; i < BUTTON_COUNT; ++i) {
+        button_map_t *b = &s_buttons[i];
+        while (b->tail != b->head) {
+            int state = b->q[b->tail & BTN_Q_MASK];
+            b->tail = (uint8_t)(b->tail + 1u);
+            TY_LOGI("BTN %s -> %d", b->code, state);
+            report_bool_dp(context, b->code, state);
+        }
     }
 }
 
@@ -80,11 +225,17 @@ static void on_connected(tuya_mqtt_context_t *context, void *user_data)
     (void)user_data;
     TY_LOGI("Tuya MQTT connected");
 
-    /* Fetch the cloud-side data model and current desired values, then push an
-     * initial property so the device shows as online with state in Smart Life.
-     * DP "upload": integer, range 60..100 (abilityId 101) per this product. */
+    /* Fetch the cloud-side data model, then publish the current state of every
+     * I/O so the device shows online with correct values in the app. */
     tuyalink_thing_data_model_get(context, NULL);
-    tuyalink_thing_property_report(context, NULL, "{\"switch\":{\"value\":true}}");
+
+    for (size_t i = 0; i < LED_COUNT; ++i) {
+        int level = GPIO_read(s_leds[i].gpio);
+        report_bool_dp(context, s_leds[i].code, level == CONFIG_GPIO_LED_ON);
+    }
+    for (size_t i = 0; i < BUTTON_COUNT; ++i) {
+        report_bool_dp(context, s_buttons[i].code, button_read(&s_buttons[i]));
+    }
 }
 
 static void on_disconnect(tuya_mqtt_context_t *context, void *user_data)
@@ -97,7 +248,6 @@ static void on_disconnect(tuya_mqtt_context_t *context, void *user_data)
 static void on_messages(tuya_mqtt_context_t *context, void *user_data,
                         const tuyalink_message_t *msg)
 {
-    (void)context;
     (void)user_data;
     TY_LOGI("Tuya msg id:%s type:%d code:%d", msg->msgid, msg->type, msg->code);
 
@@ -154,9 +304,14 @@ static void tuya_app_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 
-    /* 4. Service the connection forever (keepalive, rx, callbacks). */
+    /* 4. Start the button sampling task now that we're connected. */
+    buttons_start();
+
+    /* 5. Service the connection forever (keepalive, rx, callbacks) and flush
+     *    any queued button edges captured by the ISR. */
     for (;;) {
         tuya_mqtt_loop(&s_client);
+        drain_buttons(&s_client);
     }
 }
 

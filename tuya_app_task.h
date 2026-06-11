@@ -18,17 +18,6 @@ extern "C" {
  */
 int tuya_app_start(void);
 
-/**
- * @brief Drive a board output from an inbound cloud DP command.
- *
- * Weak no-op default lives in tuya_app_task.c. The application (which owns the
- * board GPIO config) overrides this with a strong definition, e.g.
- * GPIO_write(CONFIG_GPIO_LED_0, on).
- *
- * @param on 1 = on, 0 = off.
- */
-void tuya_app_led_set(int on);
-
 #ifdef __cplusplus
 }
 #endif
