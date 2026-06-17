@@ -93,6 +93,12 @@ static button_map_t s_buttons[] = {
 };
 #define BUTTON_COUNT (sizeof(s_buttons) / sizeof(s_buttons[0]))
 
+/* ----- Siren: alternate two external LEDs while an alarm DP is ON ----- */
+#define SIREN_DP_CODE   "alarm"     /* boolean DP, Read/Write on the product */
+#define SIREN_PERIOD_MS 150u        /* swap red<->blue every 150 ms */
+
+static volatile int s_alarm_on = 0; /* set from inbound property/set */
+
 /* ----- Helpers ----- */
 
 /* Read a button's logical (pressed) state: 1 = pressed, 0 = released. */
@@ -154,6 +160,40 @@ static void button_poll_task(void *arg)
 static void buttons_start(void)
 {
     xTaskCreate(button_poll_task, "tuya_btn", 512, NULL,
+                TUYA_APP_TASK_PRIORITY, NULL);
+}
+
+/* Dedicated task: while s_alarm_on, flash the two external siren LEDs in
+ * antiphase (red on/blue off <-> blue on/red off) every SIREN_PERIOD_MS. When
+ * off, both LEDs are held low. The pins are configured as outputs (initial low)
+ * by Board_init() from SysConfig. */
+static void siren_task(void *arg)
+{
+    (void)arg;
+    int phase = 0;
+    GPIO_write(CONFIG_GPIO_SIREN_RED, 0);
+    GPIO_write(CONFIG_GPIO_SIREN_BLUE, 0);
+
+    for (;;) {
+        if (s_alarm_on) {
+            phase = !phase;
+            GPIO_write(CONFIG_GPIO_SIREN_RED, phase ? 1 : 0);
+            GPIO_write(CONFIG_GPIO_SIREN_BLUE, phase ? 0 : 1);
+            vTaskDelay(pdMS_TO_TICKS(SIREN_PERIOD_MS));
+        } else {
+            if (phase) {
+                GPIO_write(CONFIG_GPIO_SIREN_RED, 0);
+                GPIO_write(CONFIG_GPIO_SIREN_BLUE, 0);
+                phase = 0;
+            }
+            vTaskDelay(pdMS_TO_TICKS(50));
+        }
+    }
+}
+
+static void siren_start(void)
+{
+    xTaskCreate(siren_task, "tuya_siren", 512, NULL,
                 TUYA_APP_TASK_PRIORITY, NULL);
 }
 
@@ -219,6 +259,15 @@ static void handle_property_set(tuya_mqtt_context_t *context, const char *json)
             TY_LOGI("BTN %s set by cloud -> %d", s_buttons[i].code, s_buttons[i].reported);
         }
     }
+    /* Alarm/siren control DP: ON starts the red/blue flashing, OFF stops it. */
+    {
+        int on;
+        if (parse_bool_dp(json, SIREN_DP_CODE, &on)) {
+            s_alarm_on = on;
+            TY_LOGI("SIREN %s", on ? "ON" : "OFF");
+            report_bool_dp(context, SIREN_DP_CODE, on);
+        }
+    }
 }
 
 /* ----- board -> cloud: drain queued button edges and report them ----- */
@@ -253,6 +302,7 @@ static void on_connected(tuya_mqtt_context_t *context, void *user_data)
     for (size_t i = 0; i < BUTTON_COUNT; ++i) {
         report_bool_dp(context, s_buttons[i].code, s_buttons[i].reported);
     }
+    report_bool_dp(context, SIREN_DP_CODE, s_alarm_on);
 }
 
 static void on_disconnect(tuya_mqtt_context_t *context, void *user_data)
@@ -321,8 +371,9 @@ static void tuya_app_task(void *arg)
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 
-    /* 4. Start the button sampling task now that we're connected. */
+    /* 4. Start the button sampling and siren tasks now that we're connected. */
     buttons_start();
+    siren_start();
 
     /* 5. Service the connection forever (keepalive, rx, callbacks) and flush
      *    any queued button edges captured by the ISR. */

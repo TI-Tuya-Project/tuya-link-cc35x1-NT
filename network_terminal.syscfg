@@ -13,10 +13,12 @@ const FreeRTOS              = scripting.addModule("/freertos/FreeRTOS");
 const CryptoKeyKeyStore_PSA = scripting.addModule("/ti/drivers/CryptoKeyKeyStore_PSA");
 const GPIO                  = scripting.addModule("/ti/drivers/GPIO");
 const GPIO1                 = GPIO.addInstance();
+const GPIO2                 = GPIO.addInstance();
+const GPIO3                 = GPIO.addInstance();
+const GPIO4                 = GPIO.addInstance();
+const GPIO5                 = GPIO.addInstance();
 const GPIO6                 = GPIO.addInstance();
 const GPIO7                 = GPIO.addInstance();
-const GPIO8                 = GPIO.addInstance();
-const GPIO9                 = GPIO.addInstance();
 const Power                 = scripting.addModule("/ti/drivers/Power");
 const RNG                   = scripting.addModule("/ti/drivers/RNG", {}, false);
 const RNG1                  = RNG.addInstance();
@@ -35,19 +37,25 @@ FreeRTOS.heapSize       = 0x00057000;
 GPIO1.$hardware = system.deviceData.board.components.LED_RED;
 GPIO1.$name     = "CONFIG_GPIO_LED_0";
 
-GPIO6.$name     = "CONFIG_GPIO_LED_1";
-GPIO6.$hardware = system.deviceData.board.components.LED_GREEN;
+GPIO2.$name     = "CONFIG_GPIO_LED_1";
+GPIO2.$hardware = system.deviceData.board.components.LED_GREEN;
 
-GPIO7.$name     = "CONFIG_GPIO_LED_2";
-GPIO7.$hardware = system.deviceData.board.components.LED_BLUE;
+GPIO3.$name     = "CONFIG_GPIO_LED_2";
+GPIO3.$hardware = system.deviceData.board.components.LED_BLUE;
 
-GPIO8.$hardware = system.deviceData.board.components["BTN-1"];
-GPIO8.$name     = "CONFIG_GPIO_BTN_0";
-GPIO8.pull      = "Pull Up";
+GPIO4.$hardware = system.deviceData.board.components["BTN-1"];
+GPIO4.$name     = "CONFIG_GPIO_BTN_0";
+GPIO4.pull      = "Pull Up";
 
-GPIO9.$name     = "CONFIG_GPIO_BTN_1";
-GPIO9.$hardware = system.deviceData.board.components["BTN-2"];
-GPIO9.pull      = "Pull Up";
+GPIO5.$name     = "CONFIG_GPIO_BTN_1";
+GPIO5.$hardware = system.deviceData.board.components["BTN-2"];
+GPIO5.pull      = "Pull Up";
+
+GPIO6.$name = "CONFIG_GPIO_SIREN_RED";
+GPIO6.mode  = "Output";
+
+GPIO7.$name = "CONFIG_GPIO_SIREN_BLUE";
+GPIO7.mode  = "Output";
 
 RNG1.$name = "CONFIG_RNG_0";
 
@@ -58,8 +66,7 @@ UART21.uart.dmaRxChannel.$assign = "DMA_CH3";
 
 UART22.$name = "CONFIG_UART2_1";
 
-Mem_cfg.flash_device_type = "IS25WJ032F";
-Mem_cfg.ota               = false;
+Mem_cfg.ota = false;
 
 /**
  * Pinmux solution for unlocked pins/peripherals. This ensures that minor changes to the automatic solver in a future
@@ -67,10 +74,12 @@ Mem_cfg.ota               = false;
  * re-solve from scratch.
  */
 GPIO1.gpioPin.$suggestSolution            = "boosterpack.31";
-GPIO6.gpioPin.$suggestSolution            = "boosterpack.17";
-GPIO7.gpioPin.$suggestSolution            = "boosterpack.36";
-GPIO8.gpioPin.$suggestSolution            = "boosterpack.19";
-GPIO9.gpioPin.$suggestSolution            = "boosterpack.40";
+GPIO2.gpioPin.$suggestSolution            = "boosterpack.17";
+GPIO3.gpioPin.$suggestSolution            = "boosterpack.36";
+GPIO4.gpioPin.$suggestSolution            = "boosterpack.19";
+GPIO5.gpioPin.$suggestSolution            = "boosterpack.40";
+GPIO6.gpioPin.$suggestSolution            = "boosterpack.30";
+GPIO7.gpioPin.$suggestSolution            = "boosterpack.38";
 UART21.uart.$suggestSolution              = "UART1";
 UART21.uart.txPin.$suggestSolution        = "GPIO5";
 UART21.uart.rxPin.$suggestSolution        = "GPIO6";

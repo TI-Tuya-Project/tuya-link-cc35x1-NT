@@ -23,9 +23,9 @@
 /* Optional, for reference / QR only — not used by tuya_mqtt_connect. */
 // #define TUYA_PRODUCT_ID     "n7m2dxiulimpbmns"
 
-#define TUYA_DEVICE_ID      "26c6b62f13f5a0af88s9fe"
-#define TUYA_DEVICE_SECRET  "uW6mdT6AMAzDztlB"
-#define TUYA_PRODUCT_ID     "zql7yvojnnsfyb4q"
+#define TUYA_DEVICE_ID      "26da980177d29fcf8ei7ol"
+#define TUYA_DEVICE_SECRET  "iFfxbdnE9vZ722pq"
+#define TUYA_PRODUCT_ID     "ia7v6nm8nuvoskon"
 
 
 /* The bundled CA (tuya_cacert.h) is GoDaddy Root G2, which signs Tuya's GLOBAL
