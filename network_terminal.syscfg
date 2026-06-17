@@ -19,6 +19,7 @@ const GPIO4                 = GPIO.addInstance();
 const GPIO5                 = GPIO.addInstance();
 const GPIO6                 = GPIO.addInstance();
 const GPIO7                 = GPIO.addInstance();
+const GPIO8                 = GPIO.addInstance();
 const Power                 = scripting.addModule("/ti/drivers/Power");
 const RNG                   = scripting.addModule("/ti/drivers/RNG", {}, false);
 const RNG1                  = RNG.addInstance();
@@ -59,6 +60,10 @@ GPIO7.$name              = "CONFIG_GPIO_SIREN_BLUE";
 GPIO7.mode               = "Output";
 GPIO7.initialOutputState = "Low";
 
+GPIO8.$name              = "CONFIG_GPIO_SIREN_BUZZER";
+GPIO8.mode               = "Output";
+GPIO8.initialOutputState = "Low";
+
 RNG1.$name = "CONFIG_RNG_0";
 
 UART21.$name                     = "CONFIG_UART2_0";
@@ -82,6 +87,7 @@ GPIO4.gpioPin.$suggestSolution            = "boosterpack.19";
 GPIO5.gpioPin.$suggestSolution            = "boosterpack.40";
 GPIO6.gpioPin.$assign                     = "boosterpack.9";  /* P11 / ball 11 / GPIO33 */
 GPIO7.gpioPin.$assign                     = "boosterpack.10"; /* P12 / ball 12 / GPIO32 */
+GPIO8.gpioPin.$assign                     = "boosterpack.8";  /* P32 / ball 32 / GPIO14 */
 UART21.uart.$suggestSolution              = "UART1";
 UART21.uart.txPin.$suggestSolution        = "GPIO5";
 UART21.uart.rxPin.$suggestSolution        = "GPIO6";

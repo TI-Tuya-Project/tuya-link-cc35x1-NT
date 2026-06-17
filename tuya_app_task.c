@@ -164,26 +164,31 @@ static void buttons_start(void)
 }
 
 /* Dedicated task: while s_alarm_on, flash the two external siren LEDs in
- * antiphase (red on/blue off <-> blue on/red off) every SIREN_PERIOD_MS. When
- * off, both LEDs are held low. The pins are configured as outputs (initial low)
- * by Board_init() from SysConfig. */
+ * antiphase (red on/blue off <-> blue on/red off) every SIREN_PERIOD_MS and
+ * pulse the active buzzer in step with the flash. When off, both LEDs and the
+ * buzzer are held low. The pins are configured as outputs (initial low) by
+ * Board_init() from SysConfig. */
 static void siren_task(void *arg)
 {
     (void)arg;
     int phase = 0;
     GPIO_write(CONFIG_GPIO_SIREN_RED, 0);
     GPIO_write(CONFIG_GPIO_SIREN_BLUE, 0);
+    GPIO_write(CONFIG_GPIO_SIREN_BUZZER, 0);
 
     for (;;) {
         if (s_alarm_on) {
             phase = !phase;
             GPIO_write(CONFIG_GPIO_SIREN_RED, phase ? 1 : 0);
             GPIO_write(CONFIG_GPIO_SIREN_BLUE, phase ? 0 : 1);
+            /* Beep on every red half-cycle: short on/off pulse train. */
+            GPIO_write(CONFIG_GPIO_SIREN_BUZZER, phase ? 1 : 0);
             vTaskDelay(pdMS_TO_TICKS(SIREN_PERIOD_MS));
         } else {
             if (phase) {
                 GPIO_write(CONFIG_GPIO_SIREN_RED, 0);
                 GPIO_write(CONFIG_GPIO_SIREN_BLUE, 0);
+                GPIO_write(CONFIG_GPIO_SIREN_BUZZER, 0);
                 phase = 0;
             }
             vTaskDelay(pdMS_TO_TICKS(50));
