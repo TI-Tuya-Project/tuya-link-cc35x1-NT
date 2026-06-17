@@ -1402,6 +1402,38 @@ void *network_terminal_entry(void *args)
         osi_Sleep(2);
     }
 
+    /* Try each known network in order and stop at the first that connects.
+     * cmdWlanConnectCallback() blocks up to WLAN_EVENT_TOUT and returns 0 only
+     * once the device is Connected + has an IP, or non-zero on timeout (after
+     * which it cleans up internally). Edit this table to add/remove networks —
+     * fill in your real SSIDs/passwords for the placeholder rows. */
+    {
+        static const char *const knownNetworks[] = {
+            // " -s \"Ariel-University\" -t OPEN",
+            " -s \"Dog\" -t WPA2 -p LolaShelbyLovers",
+            " -s \"Sam\" -t WPA2 -p gameOnnn",
+            " -s \"Or_Bibi\" -t WPA2 -p 19981998",
+            " -s \"Amit_iphone\" -t WPA2 -p 12345678",
+            " -s \"Iphone\" -t WPA2 -p 12345678",
+        };
+        unsigned i;
+        int connected = 0;
+        for (i = 0; i < sizeof(knownNetworks) / sizeof(knownNetworks[0]); ++i)
+        {
+            UART_PRINT("\n\r[WLAN] Trying network %u/%u ...\n\r",
+                       i + 1, (unsigned)(sizeof(knownNetworks) / sizeof(knownNetworks[0])));
+            if (cmdWlanConnectCallback((void *)knownNetworks[i]) == 0)
+            {
+                connected = 1;
+                break;
+            }
+        }
+        if (!connected)
+        {
+            UART_PRINT("\n\r[WLAN] Could not connect to any known network\n\r");
+        }
+    }
+
     /* Display Network Terminal API commands */
     showAvailableCmd();
 

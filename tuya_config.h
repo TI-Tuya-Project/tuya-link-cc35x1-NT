@@ -23,8 +23,8 @@
 /* Optional, for reference / QR only — not used by tuya_mqtt_connect. */
 // #define TUYA_PRODUCT_ID     "n7m2dxiulimpbmns"
 
-#define TUYA_DEVICE_ID      "2604ed2c473afa0493gdb0"
-#define TUYA_DEVICE_SECRET  "V5bqINJYnBhRhUEw"
+#define TUYA_DEVICE_ID      "26c6b62f13f5a0af88s9fe"
+#define TUYA_DEVICE_SECRET  "uW6mdT6AMAzDztlB"
 #define TUYA_PRODUCT_ID     "zql7yvojnnsfyb4q"
 
 

@@ -76,13 +76,15 @@ typedef struct {
     const char *code;
     uint_least8_t gpio;
     int active_low;
-    /* SPSC ring: poll task is the sole producer (head), MQTT task the consumer (tail). */
+    /* SPSC ring: poll task is the sole producer (head), MQTT task the consumer (tail).
+     * Each enqueued entry is a "press event" (1) -- the consumer toggles `reported`. */
     volatile uint8_t q[BTN_Q_LEN];
     volatile uint8_t head;
     volatile uint8_t tail;
-    int last_logical;                       /* last accepted/reported state */
+    int last_logical;                       /* last accepted physical state (debounced) */
     int cand;                               /* candidate state being debounced */
     uint8_t cand_n;                         /* consecutive samples at cand */
+    volatile int reported;                  /* latched toggle state pushed to cloud */
 } button_map_t;
 
 static button_map_t s_buttons[] = {
@@ -121,7 +123,7 @@ static void button_poll_task(void *arg)
         b->head = 0;
         b->tail = 0;
         GPIO_setConfig(b->gpio, GPIO_CFG_IN_PU);
-        b->last_logical = button_read(b);   /* baseline; reported in on_connected */
+        b->last_logical = button_read(b);
         b->cand = b->last_logical;
         b->cand_n = 0;
     }
@@ -136,7 +138,11 @@ static void button_poll_task(void *arg)
             } else if (b->cand_n < BTN_STABLE_POLLS) {
                 if (++b->cand_n >= BTN_STABLE_POLLS && s != b->last_logical) {
                     b->last_logical = s;
-                    button_enqueue(b, s);
+                    /* Only the press edge (released->pressed) is an event; the
+                     * release is ignored. The consumer toggles `reported`. */
+                    if (s) {
+                        button_enqueue(b, 1);
+                    }
                 }
             }
         }
@@ -204,6 +210,15 @@ static void handle_property_set(tuya_mqtt_context_t *context, const char *json)
             report_bool_dp(context, s_leds[i].code, on);
         }
     }
+    /* Keep the latched toggle state in sync if the app/server changes a button
+     * DP directly, so the next physical press toggles from the right baseline. */
+    for (size_t i = 0; i < BUTTON_COUNT; ++i) {
+        int on;
+        if (parse_bool_dp(json, s_buttons[i].code, &on)) {
+            s_buttons[i].reported = on ? 1 : 0;
+            TY_LOGI("BTN %s set by cloud -> %d", s_buttons[i].code, s_buttons[i].reported);
+        }
+    }
 }
 
 /* ----- board -> cloud: drain queued button edges and report them ----- */
@@ -212,10 +227,12 @@ static void drain_buttons(tuya_mqtt_context_t *context)
     for (size_t i = 0; i < BUTTON_COUNT; ++i) {
         button_map_t *b = &s_buttons[i];
         while (b->tail != b->head) {
-            int state = b->q[b->tail & BTN_Q_MASK];
+            (void)b->q[b->tail & BTN_Q_MASK];   /* press event; payload unused */
             b->tail = (uint8_t)(b->tail + 1u);
-            TY_LOGI("BTN %s -> %d", b->code, state);
-            report_bool_dp(context, b->code, state);
+            /* Each physical press toggles the latched state: pressed<->unpressed. */
+            b->reported = !b->reported;
+            TY_LOGI("BTN %s toggle -> %d", b->code, b->reported);
+            report_bool_dp(context, b->code, b->reported);
         }
     }
 }
@@ -234,7 +251,7 @@ static void on_connected(tuya_mqtt_context_t *context, void *user_data)
         report_bool_dp(context, s_leds[i].code, level == CONFIG_GPIO_LED_ON);
     }
     for (size_t i = 0; i < BUTTON_COUNT; ++i) {
-        report_bool_dp(context, s_buttons[i].code, button_read(&s_buttons[i]));
+        report_bool_dp(context, s_buttons[i].code, s_buttons[i].reported);
     }
 }
 
