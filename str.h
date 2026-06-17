@@ -625,4 +625,8 @@ extern const char loadCertificateDetailsStr[];
 void printBorder(char ch,
                  int n);
 
+extern const char tuyaStr[];
+extern const char tuyaUsageStr[];
+extern const char *tuyaDetailsStr;
+
 #endif /* __STR_H__ */

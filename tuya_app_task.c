@@ -1,16 +1,10 @@
 /**
  * @file tuya_app_task.c
- * @brief FreeRTOS task that brings the device online via the pre-activated
- *        tuyalink MQTT path: SNTP time sync -> tuya_mqtt_init -> connect -> loop.
- *
- * Prerequisite: Wi-Fi STA + IP must already be up (handled by the TI
- * network_terminal example). Call tuya_app_start() once the IP_EVENT /
- * IPV4_ACQUIRED has fired. This module deliberately does not own Wi-Fi.
- *
- * Reporting: edit on_connected() / the example data point ids to match your
- * product's DP schema on the Tuya platform.
+ * @brief TuyaLink MQTT task: light_color, click_count, link_trigger DPs.
  */
 #include "tuya_app_task.h"
+#include "tuya_app_buttons.h"
+#include "tuya_app_lights.h"
 #include "tuya_config.h"
 #include "tuya_sntp.h"
 #include "ti_platform.h"
@@ -21,57 +15,241 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
+#include "queue.h"
 
+#include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
 
-/* Region CA root for the m1.tuya*.com brokers. Provided per-example in the
- * upstream SDK; the data_model demo's copy is reused here. */
 #include "tuya_cacert.h"
 
 #define TUYA_APP_TASK_STACK_WORDS  (4096)
 #define TUYA_APP_TASK_PRIORITY     (3)
 
 static tuya_mqtt_context_t s_client;
+static volatile int s_mqtt_ready;
+static QueueHandle_t s_click_report_q;
 
-/* Weak default — the application overrides this to drive real board hardware.
- * Kept in the library so the bring-up code links standalone. */
-__attribute__((weak)) void tuya_app_led_set(int on)
+static const char *skip_ws(const char *p)
 {
-    TY_LOGI("tuya_app_led_set(%d) [no-op: override in app]", on);
+    while (*p == ' ' || *p == '\t') {
+        ++p;
+    }
+    return p;
 }
 
-/* Map an inbound property/set payload to an on/off and drive the LED hook.
- * Boolean DP  -> true/false.
- * Numeric DP  -> on when value >= 80 (works with the demo "upload" 60..100 DP;
- *                add a Boolean DP for a real switch with a clean off state). */
+static const char *find_dp_value(const char *json, const char *key)
+{
+    char needle[32];
+    const char *p;
+    const char *v;
+
+    if (json == NULL || key == NULL) {
+        return NULL;
+    }
+
+    snprintf(needle, sizeof(needle), "\"%s\"", key);
+    p = strstr(json, needle);
+    if (p == NULL) {
+        return NULL;
+    }
+
+    p = strchr(p + strlen(needle), ':');
+    if (p == NULL) {
+        return NULL;
+    }
+    p = skip_ws(p + 1);
+
+    if (*p == '{') {
+        v = strstr(p, "\"value\"");
+        if (v == NULL) {
+            return NULL;
+        }
+        p = strchr(v, ':');
+        if (p == NULL) {
+            return NULL;
+        }
+        return skip_ws(p + 1);
+    }
+
+    return p;
+}
+
+static int parse_string_dp(const char *json, const char *key,
+                           char *out, size_t out_len)
+{
+    const char *p;
+    const char *start;
+    size_t len;
+
+    p = find_dp_value(json, key);
+    if (p == NULL || *p != '"') {
+        return -1;
+    }
+    ++p;
+    start = p;
+    while (*p != '\0' && *p != '"') {
+        ++p;
+    }
+    if (*p != '"') {
+        return -1;
+    }
+
+    len = (size_t)(p - start);
+    if (len + 1 > out_len) {
+        return -1;
+    }
+    memcpy(out, start, len);
+    out[len] = '\0';
+    return 0;
+}
+
+static int parse_int_dp(const char *json, const char *key, int *out)
+{
+    const char *p;
+
+    p = find_dp_value(json, key);
+    if (p == NULL) {
+        return -1;
+    }
+
+    *out = atoi(p);
+    return 0;
+}
+
+static int parse_bool_dp(const char *json, const char *key, int *out_on)
+{
+    const char *p;
+
+    p = find_dp_value(json, key);
+    if (p == NULL) {
+        return -1;
+    }
+
+    if (strncmp(p, "true", 4) == 0) {
+        *out_on = 1;
+        return 0;
+    }
+    if (strncmp(p, "false", 5) == 0) {
+        *out_on = 0;
+        return 0;
+    }
+
+    return -1;
+}
+
+int tuya_app_mqtt_is_ready(void)
+{
+    return s_mqtt_ready;
+}
+
+void tuya_app_report_light_color(void)
+{
+    char report[80];
+
+    if (!s_mqtt_ready) {
+        return;
+    }
+    snprintf(report, sizeof(report),
+             "{\"" TUYA_DP_LIGHT_COLOR_KEY "\":{\"value\":\"%s\"}}",
+             tuya_app_light_color_get());
+    tuyalink_thing_property_report(&s_client, NULL, report);
+}
+
+void tuya_app_report_click_count(int count)
+{
+    char report[64];
+
+    if (!s_mqtt_ready) {
+        return;
+    }
+    snprintf(report, sizeof(report),
+             "{\"" TUYA_DP_CLICK_COUNT_KEY "\":{\"value\":%d}}", count);
+    if (tuyalink_thing_property_report(&s_client, NULL, report) != OPRT_OK) {
+        TY_LOGW("click_count report failed for %d", count);
+    }
+}
+
+void tuya_app_notify_click_count(int count)
+{
+    if (s_click_report_q == NULL) {
+        return;
+    }
+    (void)xQueueOverwrite(s_click_report_q, &count);
+}
+
+static void flush_click_count_reports(void)
+{
+    int count;
+
+    if (!s_mqtt_ready || s_click_report_q == NULL) {
+        return;
+    }
+
+    do {
+        int latest = -1;
+
+        while (xQueueReceive(s_click_report_q, &count, 0) == pdTRUE) {
+            latest = count;
+        }
+        if (latest < 0) {
+            break;
+        }
+        tuya_app_report_click_count(latest);
+    } while (uxQueueMessagesWaiting(s_click_report_q) > 0);
+}
+
+void tuya_app_report_link_trigger(int on)
+{
+    char report[64];
+
+    if (!s_mqtt_ready) {
+        return;
+    }
+    snprintf(report, sizeof(report),
+             "{\"" TUYA_DP_LINK_TRIGGER_KEY "\":{\"value\":%s}}",
+             on ? "true" : "false");
+    tuyalink_thing_property_report(&s_client, NULL, report);
+}
+
+static void report_all_state(tuya_mqtt_context_t *context)
+{
+    (void)context;
+    tuya_app_report_light_color();
+    tuya_app_report_click_count(tuya_app_buttons_get_count());
+    tuya_app_report_link_trigger(0);
+}
+
 static void handle_property_set(tuya_mqtt_context_t *context, const char *json)
 {
+    char color[16];
+    int count;
+    int trigger;
+    int handled = 0;
+
     if (json == NULL) {
         return;
     }
-    const char *v = strstr(json, "\"upload\"");
-    int on = -1;
-    if (v != NULL) {
-        v = strchr(v, ':');
-        if (v != NULL) {
-            ++v;
-            while (*v == ' ' || *v == '\t') {
-                ++v;
-            }
-            if (strncmp(v, "true", 4) == 0) {
-                on = 1;
-            } else if (strncmp(v, "false", 5) == 0) {
-                on = 0;
-            } else {
-                on = (atoi(v) >= 80) ? 1 : 0;
-            }
-        }
+
+    if (parse_string_dp(json, TUYA_DP_LIGHT_COLOR_KEY, color, sizeof(color)) == 0) {
+        tuya_app_light_color_set(color);
+        TY_LOGI("DP %s -> %s", TUYA_DP_LIGHT_COLOR_KEY, color);
+        handled = 1;
     }
-    if (on >= 0) {
-        tuya_app_led_set(on);
-        /* Echo the new state back so the app panel stays in sync. */
-        tuyalink_thing_property_report(context, NULL, json);
+
+    if (parse_int_dp(json, TUYA_DP_CLICK_COUNT_KEY, &count) == 0) {
+        tuya_app_buttons_set_count(count);
+        TY_LOGI("DP %s -> %d", TUYA_DP_CLICK_COUNT_KEY, count);
+        handled = 1;
+    }
+
+    if (parse_bool_dp(json, TUYA_DP_LINK_TRIGGER_KEY, &trigger) == 0) {
+        TY_LOGI("DP %s -> %s", TUYA_DP_LINK_TRIGGER_KEY, trigger ? "true" : "false");
+        handled = 1;
+    }
+
+    if (handled) {
+        report_all_state(context);
     }
 }
 
@@ -79,25 +257,27 @@ static void on_connected(tuya_mqtt_context_t *context, void *user_data)
 {
     (void)user_data;
     TY_LOGI("Tuya MQTT connected");
+    s_mqtt_ready = 1;
 
-    /* Fetch the cloud-side data model and current desired values, then push an
-     * initial property so the device shows as online with state in Smart Life.
-     * DP "upload": integer, range 60..100 (abilityId 101) per this product. */
     tuyalink_thing_data_model_get(context, NULL);
-    tuyalink_thing_property_report(context, NULL, "{\"upload\":{\"value\":80}}");
+    tuyalink_thing_desired_get(context, NULL,
+                               "[\"" TUYA_DP_LIGHT_COLOR_KEY "\",\""
+                               TUYA_DP_CLICK_COUNT_KEY "\",\""
+                               TUYA_DP_LINK_TRIGGER_KEY "\"]");
+    report_all_state(context);
 }
 
 static void on_disconnect(tuya_mqtt_context_t *context, void *user_data)
 {
     (void)context;
     (void)user_data;
+    s_mqtt_ready = 0;
     TY_LOGI("Tuya MQTT disconnected");
 }
 
 static void on_messages(tuya_mqtt_context_t *context, void *user_data,
                         const tuyalink_message_t *msg)
 {
-    (void)context;
     (void)user_data;
     TY_LOGI("Tuya msg id:%s type:%d code:%d", msg->msgid, msg->type, msg->code);
 
@@ -118,7 +298,6 @@ static void tuya_app_task(void *arg)
 {
     (void)arg;
 
-    /* 1. Wall clock — required before the HMAC-signed CONNECT. */
     if (!tuya_platform_time_is_valid()) {
         tuya_sntp_sync(5);
     }
@@ -128,7 +307,6 @@ static void tuya_app_task(void *arg)
         return;
     }
 
-    /* 2. Init the pre-activated MQTT client. */
     int ret = tuya_mqtt_init(&s_client, &(const tuya_mqtt_config_t){
         .host          = TUYA_MQTT_HOST,
         .port          = TUYA_MQTT_PORT,
@@ -148,15 +326,21 @@ static void tuya_app_task(void *arg)
         return;
     }
 
-    /* 3. Connect (TLS + HMAC auth). Retry on transient failure. */
     while ((ret = tuya_mqtt_connect(&s_client)) != OPRT_OK) {
         TY_LOGE("tuya_mqtt_connect failed: %d, retrying in 5s", ret);
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 
-    /* 4. Service the connection forever (keepalive, rx, callbacks). */
+    s_click_report_q = xQueueCreate(1, sizeof(int));
+    if (s_click_report_q == NULL) {
+        TY_LOGE("click_count report queue alloc failed");
+        vTaskDelete(NULL);
+        return;
+    }
+
     for (;;) {
         tuya_mqtt_loop(&s_client);
+        flush_click_count_reports();
     }
 }
 

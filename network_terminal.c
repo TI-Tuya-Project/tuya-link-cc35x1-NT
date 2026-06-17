@@ -73,6 +73,9 @@
 
 #ifdef CC35XX
 #include "tuya_app_task.h"
+#include "tuya_app_lights.h"
+#include "tuya_app_buttons.h"
+#include "tuya_cmd.h"
 #include "log.h"   /* Tuya/mbedTLS log backend (log.c) — for UART redirect */
 #endif
 
@@ -207,6 +210,9 @@ cmdAction_t gCmdList[] =
 
 /* wlan Start*/
 { wlanStartStr,         cmdWlanStartCallback,       printWlanStartUsage         },
+
+/* Tuya one-shot Wi-Fi + cloud path */
+{ tuyaStr,              cmdTuyaCallback,            printTuyaUsage              },
 
 /* wlan Stop */
 { wlanStopStr,          cmdWlanStopCallback,        printWlanStopUsage          },
@@ -1325,25 +1331,19 @@ static void tuya_uart_log_cb(log_Event *ev)
            log_level_string(ev->level), ev->file, ev->line, buf);
 }
 
-/* Strong override of the weak hook in tuya_app_task.c. Drives the board LED
- * (CONFIG_GPIO_LED_0, configured in SysConfig as LED_RED) from cloud DP
- * commands. GPIO is already initialized by Board_init(). */
-void tuya_app_led_set(int on)
-{
-    GPIO_write(CONFIG_GPIO_LED_0, on ? 1 : 0);
-    UART_PRINT("[TUYA] LED -> %s\n\r", on ? "ON" : "OFF");
-}
-
 static void on_ip_acquired(WlanRole_e role, uint32_t address)
 {
     static int s_started = 0;
-    if (role == WLAN_ROLE_STA && address != 0 && !s_started)
+    if (role == WLAN_ROLE_STA && address != 0)
     {
-        s_started = 1;
-        UART_PRINT("\n\r[TUYA] STA IP acquired (0x%08X), starting Tuya task...\n\r",
-                   (unsigned)address);
-        int rc = tuya_app_start();
-        UART_PRINT("[TUYA] tuya_app_start rc=%d\n\r", rc);
+        if (!s_started)
+        {
+            s_started = 1;
+            UART_PRINT("\n\r[TUYA] STA IP acquired (0x%08X), starting Tuya task...\n\r",
+                       (unsigned)address);
+            int rc = tuya_app_start();
+            UART_PRINT("[TUYA] tuya_app_start rc=%d\n\r", rc);
+        }
     }
 }
 #endif
@@ -1376,6 +1376,8 @@ void *network_terminal_entry(void *args)
     HWREG(ICACHE_BASE + 0x4)  |= 0xc0000000;
 
     Board_init();
+    tuya_app_lights_init();
+    tuya_app_buttons_init();
 
 #ifdef TERMINAL_TAB_COMPLETION
     initCompletions();
@@ -1403,6 +1405,7 @@ void *network_terminal_entry(void *args)
 
     /* Display Network Terminal API commands */
     showAvailableCmd();
+    tuya_cmd_auto_start();
 
     if(RetVal < 0)
     {

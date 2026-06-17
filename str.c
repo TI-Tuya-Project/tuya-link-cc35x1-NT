@@ -271,6 +271,12 @@ const char wlanStartStr[]                      = "wlan_start";
 const char wlanStartUsageStr[]                 = " [-help] \n\r";
 const char *wlanStartDetailsStr                = "Wlan start .\n\r";
 
+const char tuyaStr[]                           = "tuya";
+const char tuyaUsageStr[]                      = " [-help]\n\r";
+const char *tuyaDetailsStr                     =
+    "wlan_start + wlan_sta_role_up + wlan_connect using TUYA_WIFI_* in tuya_config.h.\n\r"
+    "\tAlso runs automatically once after boot.\n\r";
+
 /* wlan stop */
 const char wlanStopStr[]                      = "wlan_stop";
 const char wlanStopUsageStr[]                 = " [-help] [-r] <For Recovery wlan_stop> ";

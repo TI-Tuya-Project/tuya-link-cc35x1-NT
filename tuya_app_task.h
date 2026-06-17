@@ -1,6 +1,6 @@
 /**
  * @file tuya_app_task.h
- * @brief Entry point for the Tuya bring-up task.
+ * @brief Tuya MQTT bring-up and cloud property reporting.
  */
 #ifndef TUYA_APP_TASK_H
 #define TUYA_APP_TASK_H
@@ -9,25 +9,16 @@
 extern "C" {
 #endif
 
-/**
- * @brief Create the FreeRTOS task that syncs time and connects to Tuya cloud.
- *
- * Call once, after Wi-Fi STA + IPv4 are up. Non-blocking.
- *
- * @return 0 if the task was created, negative otherwise.
- */
 int tuya_app_start(void);
 
-/**
- * @brief Drive a board output from an inbound cloud DP command.
- *
- * Weak no-op default lives in tuya_app_task.c. The application (which owns the
- * board GPIO config) overrides this with a strong definition, e.g.
- * GPIO_write(CONFIG_GPIO_LED_0, on).
- *
- * @param on 1 = on, 0 = off.
- */
-void tuya_app_led_set(int on);
+/** True after the first successful MQTT connect. */
+int tuya_app_mqtt_is_ready(void);
+
+void tuya_app_report_light_color(void);
+void tuya_app_report_click_count(int count);
+/** Queue latest count for reporting from the MQTT task (safe for rapid button presses). */
+void tuya_app_notify_click_count(int count);
+void tuya_app_report_link_trigger(int on);
 
 #ifdef __cplusplus
 }
