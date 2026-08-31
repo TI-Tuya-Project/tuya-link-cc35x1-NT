@@ -23,7 +23,9 @@
 
 This project integrates **Tuya's TuyaLink SDK** into **Texas Instruments' SimpleLink™ SDK**, enabling TI's **CC35X1** Wi-Fi microcontroller to connect to and be controlled through the **Tuya IoT Platform** and the **Tuya Smart Life** mobile app.
 
-**TuyaLink** is Tuya's hardware-agnostic **cloud connectivity protocol** (MQTT-based) for authenticating a device to Tuya's cloud, exchanging data points (DPs) with it, and driving/reading real GPIO hardware from a mobile app in real time. The work targets the TI **`network_terminal`** example application (FreeRTOS, TI-CLANG toolchain, lwIP, TI mbedTLS) as the integration point.
+**TuyaLink** is Tuya's hardware-agnostic **cloud connectivity protocol** (MQTT-based) for authenticating a device to Tuya's cloud, exchanging data points (DPs) with it, and driving/reading real GPIO hardware from a mobile app in real time.
+
+This repository is built **on top of TI's `network_terminal` example application**, the reference Wi-Fi/BLE bring-up app shipped with the TI SimpleLink™ Wi-Fi CC35XX SDK (FreeRTOS, TI-CLANG toolchain, lwIP, TI mbedTLS). The Tuya/TuyaLink integration is added as an additional application layer on top of that existing example, reusing its Wi-Fi connection management and command-line infrastructure rather than replacing it.
 
 **Goal:** demonstrate a full, end-to-end IoT pipeline — real hardware → secure authenticated cloud connection → consumer-facing mobile app control — running entirely on TI silicon and FreeRTOS.
 
