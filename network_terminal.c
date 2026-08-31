@@ -1399,7 +1399,7 @@ void *network_terminal_entry(void *args)
 
     cmdWlanRoleUpStaCallback(" ");
     {
-        osi_Sleep(2);
+        osi_Sleep(5);
     }
 
     /* Try each known network in order and stop at the first that connects.
@@ -1409,7 +1409,7 @@ void *network_terminal_entry(void *args)
      * fill in your real SSIDs/passwords for the placeholder rows. */
     {
         static const char *const knownNetworks[] = {
-            " -s \"Ariel-University\" -t OPEN",
+            // " -s \"Ariel-University\" -t OPEN",
             // " -s \"Dog\" -t WPA2 -p LolaShelbyLovers",
             " -s \"Sam\" -t WPA2 -p gameOnnn",
             " -s \"Or_Bibi\" -t WPA2 -p 19981998",
