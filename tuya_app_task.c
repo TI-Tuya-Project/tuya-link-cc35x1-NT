@@ -11,10 +11,22 @@
  * -----------------
  * Two tables map Tuya data points (DPs) to board GPIOs:
  *   - s_leds[]    : cloud -> board. A boolean DP write drives the LED output.
- *   - s_buttons[] : board -> cloud. A button level change is reported as a DP.
+ *   - s_buttons[] : board -> cloud. A button press toggles a latched DP value.
  * To add/rename an output or input, edit the table only. The DP `code` strings
  * MUST match the DP codes defined on the Tuya product, or the cloud will drop
  * the message.
+ *
+ * Plus one fixed I/O device outside the tables:
+ *   - siren_task(): cloud -> board. The boolean "alarm" DP (SIREN_DP_CODE)
+ *     drives two external LEDs (red/blue) in antiphase and a buzzer, all in
+ *     sync, every SIREN_PERIOD_MS while the DP is true.
+ *
+ * Inbound DP parsing (parse_bool_dp) does a plain substring search rather than
+ * full JSON parsing, so it assumes no DP code is a substring of another and
+ * that a quoted DP code never appears as a *value* elsewhere in the payload.
+ * That holds for the current DP set (led_red/green/blue, button_1/2, alarm);
+ * revisit with a real JSON parser (cJSON is already linked transitively) if
+ * more DPs are added.
  */
 #include "tuya_app_task.h"
 #include "tuya_config.h"
@@ -41,6 +53,8 @@
 
 #define TUYA_APP_TASK_STACK_WORDS  (4096)
 #define TUYA_APP_TASK_PRIORITY     (3)
+#define BUTTON_TASK_STACK_WORDS    (512)
+#define SIREN_TASK_STACK_WORDS     (512)
 
 static tuya_mqtt_context_t s_client;
 
@@ -159,7 +173,7 @@ static void button_poll_task(void *arg)
 /* Start the button sampling task. GPIO is already initialized by Board_init(). */
 static void buttons_start(void)
 {
-    xTaskCreate(button_poll_task, "tuya_btn", 512, NULL,
+    xTaskCreate(button_poll_task, "tuya_btn", BUTTON_TASK_STACK_WORDS, NULL,
                 TUYA_APP_TASK_PRIORITY, NULL);
 }
 
@@ -198,7 +212,7 @@ static void siren_task(void *arg)
 
 static void siren_start(void)
 {
-    xTaskCreate(siren_task, "tuya_siren", 512, NULL,
+    xTaskCreate(siren_task, "tuya_siren", SIREN_TASK_STACK_WORDS, NULL,
                 TUYA_APP_TASK_PRIORITY, NULL);
 }
 
@@ -381,7 +395,7 @@ static void tuya_app_task(void *arg)
     siren_start();
 
     /* 5. Service the connection forever (keepalive, rx, callbacks) and flush
-     *    any queued button edges captured by the ISR. */
+     *    any button-press edges queued by button_poll_task. */
     for (;;) {
         tuya_mqtt_loop(&s_client);
         drain_buttons(&s_client);
