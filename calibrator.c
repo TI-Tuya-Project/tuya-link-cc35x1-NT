@@ -29,6 +29,13 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file calibrator.c
+ * @brief WLAN radio calibration command dispatch and diagnostic output.
+ * Converts terminal options into driver calibration requests and prints results
+ * and command usage. Requires the WLAN/test-mode state expected by each driver
+ * operation; commands can change radio transmission and receive-test state.
+ */
 #include "network_terminal.h"
 #include <stdlib.h>
 #include <ctype.h>
@@ -1959,6 +1966,13 @@ int32_t parseCalibratorSetUplinkMuData(void *arg, CalibratorSetUplinkMuDataParam
 
     \sa           cmdCalibratorCallback
  *///
+/**
+ * @brief Parse manual RX/TX calibration flags into an existing bitmap.
+ * @param arg Valid CLI option string.
+ * @param[in,out] calibration_bitmap Required initialized mask updated by accepted options.
+ * @return 0 for accepted syntax/count, -1 for help or invalid/missing values.
+ * @note Uses shared strtok() state; partial bitmap changes are not rolled back.
+ */
 int32_t parseCalibratorSetManualCalib(void *arg, uint16* calibration_bitmap)
 {
     char cmdStr[CMD_BUFFER_LEN + 1];
@@ -2553,6 +2567,11 @@ int32_t parseCalibratorAction(void *arg, CalibratorAction_e *calibratorAction)
  *             Usage and prints zone             *
  *************************************************/
 
+/**
+ * @brief Print the configured TX calibration fields.
+ * @param getTxParams Required borrowed TX configuration structure.
+ * @note Display-only; does not query or change radio state.
+ */
 void calibratorDisplayTxParams(CalibratorStartTxParams_t *getTxParams)
 {
     Report("\r\nParameter\t\t\tValue");
@@ -2593,6 +2612,11 @@ void calibratorDisplayTxParams(CalibratorStartTxParams_t *getTxParams)
     Report("status:\t\t\t\t0\r\n");
 }
 
+/**
+ * @brief Print received-packet counters, RSSI/SNR fields and packet error ratio.
+ * @param getRxParams Valid borrowed driver statistics structure.
+ * @note Prints PER as a fraction; reports N/A when the total packet count is zero.
+ */
 void calibratorDisplayRxStats(CalibratorGetRxParams_t *getRxParams)
 {
     Report("\r\nTotal Received Packets:\t%d", getRxParams->receivedTotalPacketsNumber);
@@ -2614,6 +2638,11 @@ void calibratorDisplayRxStats(CalibratorGetRxParams_t *getRxParams)
     }
 }
 
+/**
+ * @brief Print Calibrator command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printCalibratorUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -2629,6 +2658,9 @@ int32_t printCalibratorUsage(void *arg)
     return 0;
 }
 
+/**
+ * @brief Print Calibrator Power Mode command syntax and option descriptions.
+ */
 void printCalibratorPowerModeUsage()
 {
     UART_PRINT(lineBreak);
@@ -2642,6 +2674,9 @@ void printCalibratorPowerModeUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Tune Channel command syntax and option descriptions.
+ */
 void printCalibratorTuneChannelUsage()
 {
     UART_PRINT(lineBreak);
@@ -2657,6 +2692,9 @@ void printCalibratorTuneChannelUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Start Tx command syntax and option descriptions.
+ */
 void printCalibratorStartTxUsage()
 {
     UART_PRINT(lineBreak);
@@ -2669,6 +2707,9 @@ void printCalibratorStartTxUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Start Tx Tone command syntax and option descriptions.
+ */
 void printCalibratorStartTxToneUsage()
 {
     UART_PRINT(lineBreak);
@@ -2684,6 +2725,9 @@ void printCalibratorStartTxToneUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Stop Tx command syntax and option descriptions.
+ */
 void printCalibratorStopTxUsage()
 {
     UART_PRINT(lineBreak);
@@ -2696,6 +2740,9 @@ void printCalibratorStopTxUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Set Tx command syntax and option descriptions.
+ */
 void printCalibratorSetTxUsage()
 {
     UART_PRINT(lineBreak);
@@ -2733,6 +2780,9 @@ void printCalibratorSetTxUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Set Tb Tx command syntax and option descriptions.
+ */
 void printCalibratorSetTbTxUsage()
 {
     UART_PRINT(lineBreak);
@@ -2745,6 +2795,9 @@ void printCalibratorSetTbTxUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Get Tx Params command syntax and option descriptions.
+ */
 void printCalibratorGetTxParamsUsage()
 {
     UART_PRINT(lineBreak);
@@ -2757,6 +2810,9 @@ void printCalibratorGetTxParamsUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Start Rx command syntax and option descriptions.
+ */
 void printCalibratorStartRxUsage()
 {
     UART_PRINT(lineBreak);
@@ -2777,6 +2833,9 @@ void printCalibratorStartRxUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Stop Rx command syntax and option descriptions.
+ */
 void printCalibratorStopRxUsage()
 {
     UART_PRINT(lineBreak);
@@ -2789,6 +2848,9 @@ void printCalibratorStopRxUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Get Rx Stats command syntax and option descriptions.
+ */
 void printCalibratorGetRxStatsUsage()
 {
     UART_PRINT(lineBreak);
@@ -2801,6 +2863,9 @@ void printCalibratorGetRxStatsUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Rate Override command syntax and option descriptions.
+ */
 void printCalibratorRateOverrideUsage()
 {
     UART_PRINT(lineBreak);
@@ -2813,6 +2878,9 @@ void printCalibratorRateOverrideUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator BAEnable command syntax and option descriptions.
+ */
 void printCalibratorBAEnableUsage()
 {
     UART_PRINT(lineBreak);
@@ -2825,6 +2893,9 @@ void printCalibratorBAEnableUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Link Adapt command syntax and option descriptions.
+ */
 void printCalibratorLinkAdaptUsage()
 {
     UART_PRINT(lineBreak);
@@ -2841,6 +2912,9 @@ void printCalibratorLinkAdaptUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Get Beacon Rssi command syntax and option descriptions.
+ */
 void printCalibratorGetBeaconRssiUsage()
 {
     UART_PRINT(lineBreak);
@@ -2853,6 +2927,9 @@ void printCalibratorGetBeaconRssiUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Set Gi Ltf command syntax and option descriptions.
+ */
 void printCalibratorSetGiLtfUsage()
 {
     UART_PRINT(lineBreak);
@@ -2865,6 +2942,9 @@ void printCalibratorSetGiLtfUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Set Manual Calib command syntax and option descriptions.
+ */
 void printCalibratorSetManualCalibUsage()
 {
     UART_PRINT(lineBreak);
@@ -2878,6 +2958,9 @@ void printCalibratorSetManualCalibUsage()
 
 }
 
+/**
+ * @brief Print Calibrator Set Uplink Mu command syntax and option descriptions.
+ */
 void printCalibratorSetUplinkMuUsage()
 {
     UART_PRINT(lineBreak);
@@ -2890,6 +2973,9 @@ void printCalibratorSetUplinkMuUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Set Operation Mode Control command syntax and option descriptions.
+ */
 void printCalibratorSetOperationModeControlUsage()
 {
     UART_PRINT(lineBreak);
@@ -2902,6 +2988,9 @@ void printCalibratorSetOperationModeControlUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Set Mcs Rate command syntax and option descriptions.
+ */
 void printCalibratorSetMcsRateUsage()
 {
     UART_PRINT(lineBreak);
@@ -2914,6 +3003,9 @@ void printCalibratorSetMcsRateUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Set Uplink Mu Data command syntax and option descriptions.
+ */
 void printCalibratorSetUplinkMuDataUsage()
 {
     UART_PRINT(lineBreak);
@@ -2927,6 +3019,9 @@ void printCalibratorSetUplinkMuDataUsage()
 }
 
 
+/**
+ * @brief Print Calibrator Set Psm command syntax and option descriptions.
+ */
 void printCalibratorSetPsmUsage()
 {
     UART_PRINT(lineBreak);
@@ -2939,6 +3034,9 @@ void printCalibratorSetPsmUsage()
     UART_PRINT(lineBreak);
 }
 
+/**
+ * @brief Print Calibrator Set Power Header command syntax and option descriptions.
+ */
 void printCalibratorSetPowerHeaderUsage()
 {
     UART_PRINT(lineBreak);
@@ -2952,6 +3050,9 @@ void printCalibratorSetPowerHeaderUsage()
 }
 
 
+/**
+ * @brief Print Calibrator Set Transmit Omi command syntax and option descriptions.
+ */
 void printCalibratorSetTransmitOmiUsage()
 {
     UART_PRINT(lineBreak);

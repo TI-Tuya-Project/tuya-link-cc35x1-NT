@@ -29,6 +29,12 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file main_freertos.c
+ * @brief FreeRTOS boot entry: initialize the board and launch the POSIX main thread.
+ * Creates a detached priority-5 mainThread with THREADSTACKSIZE bytes, then
+ * starts the scheduler. Attribute-setting or thread-creation errors halt boot.
+ */
 /*
  *  ======== main_freertos.c ========
  */
@@ -56,6 +62,13 @@ extern void *mainThread(void *arg0);
 
 /*
  *  ======== main ========
+ */
+/**
+ * @brief Initialize board services, create mainThread and start FreeRTOS.
+ * @return 0 only if vTaskStartScheduler() returns; normally does not return.
+ * @note Initializes IAR locks when applicable. The detached thread uses priority
+ *  5 and THREADSTACKSIZE bytes (default 6048). Attribute-setting/thread-creation
+ *  errors spin forever; pthread_attr_init() status is not checked.
  */
 int main(void)
 {

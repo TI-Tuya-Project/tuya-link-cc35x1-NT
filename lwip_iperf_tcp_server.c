@@ -29,6 +29,14 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file lwip_iperf_tcp_server.c
+ * @brief Raw-lwIP TCP throughput server for CC35XX.
+ * Reserves shared iperf session storage and queues listener setup to the TCP/IP
+ * thread. Accepted traffic updates receive-byte counters; timer notifications
+ * queue interval reports and final cleanup back to the core thread. Each session
+ * holds a single accepted-connection pointer, not an independent client table.
+ */
 #include <string.h>
 #include <stdio.h>
 #include "lwip/sockets.h"
@@ -74,6 +82,13 @@ extern err_t iperflwip_tcp_client_tx(session_conn_t* session_con);
 
 
 // Initialize iperf server
+/**
+ * @brief Create and bind the session TCP listener.
+ * @param args Live reserved session with copied configuration.
+ * @note Core callback; nonzero source must match a local interface. Setup errors
+ *  are logged, not returned to the start caller. Bind failure clears the PCB
+ *  but execution continues; caller startup success is not proof of a listener.
+ */
 void iperflwip_server_tcp_init(void* args)
 {
 
@@ -120,6 +135,15 @@ void iperflwip_server_tcp_init(void* args)
 }
 
 // Accept callback
+/**
+ * @brief Install receive callbacks and timed reporting for an accepted client.
+ * @param arg Live server session.
+ * @param newpcb Newly accepted PCB retained by the session.
+ * @param err Accept status.
+ * @return ERR_VAL for invalid input/status, otherwise ERR_OK.
+ * @note Core context. Resets session counters and stores one connection pointer;
+ *  multiple clients are not independently tracked. Timer setup errors only log.
+ */
 static err_t iperflwip_tcp_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
 {
     Report("\n\r iperflwip_server: Client connected !\n\r");
@@ -186,6 +210,16 @@ static err_t iperflwip_tcp_accept(void *arg, struct tcp_pcb *newpcb, err_t err)
 }
 
 // Receive callback
+/**
+ * @brief Count received TCP bytes and acknowledge receive-window space.
+ * @param arg Live session callback argument.
+ * @param tpcb Expected session PCB; mismatch asserts.
+ * @param p Received pbuf, or NULL for peer closure.
+ * @param err Receive status.
+ * @return Always ERR_OK.
+ * @note Core context. Frees p on successful non-NULL reception and requests stop
+ *  on peer closure. The error branch logs/returns without freeing a non-NULL p.
+ */
 static err_t iperflwip_tcp_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p, err_t err)
 {
     session_conn_t *session_con = (session_conn_t *)arg;
@@ -235,6 +269,13 @@ static err_t iperflwip_tcp_recv(void *arg, struct tcp_pcb *tpcb, struct pbuf *p,
 }
 
 // Sent callback (optional)
+/**
+ * @brief Accept the optional sent notification without further action.
+ * @param arg Unused session argument.
+ * @param tpcb Unused PCB.
+ * @param len Unused acknowledged-byte count.
+ * @return Always ERR_OK.
+ */
 static err_t iperflwip_tcp_server_sent(void *arg, struct tcp_pcb *tpcb, u16_t len)
 {
     return ERR_OK;
@@ -242,6 +283,13 @@ static err_t iperflwip_tcp_server_sent(void *arg, struct tcp_pcb *tpcb, u16_t le
 
 
 // Timer callback after test duration
+/**
+ * @brief Print receive throughput, rearm the report timer or finish the test.
+ * @param arg Live server session; TCP/IP callback context.
+ * @note Uses received-byte counters and elapsed OSI time. Timeout/abort completes
+ *  via iperflwip_tcp_close(); timer rearm errors are ignored. Interval rate
+ *  calculation assumes a nonzero elapsed duration.
+ */
 static void iperflwip_report(void* arg)
 {
     double secondsFromStart, durationInSecond;
@@ -304,11 +352,24 @@ static void iperflwip_report(void* arg)
     }
 }
 
+/**
+ * @brief Queue TCP server reporting from a POSIX timer notification.
+ * @param sv sival_ptr holds a live session through callback execution.
+ * @note Queue failures are ignored; raw PCB work is deferred to the TCP/IP thread.
+ */
 static void iperflwip_server_os_timer_callback(union sigval sv)
 {
     tcpip_callback(iperflwip_report,sv.sival_ptr);
 }
 
+/**
+ * @brief Reserve a shared session and queue TCP server setup.
+ * @param args Valid RecvCmd_t pointer copied before returning.
+ * @return 0 after queuing setup, -1 when no candidate slot is found.
+ * @note Requires initialized lwIP; serialize slot allocation. Queue status is
+ *  unchecked and the 50-microsecond sleep is not an initialization barrier.
+ *  Search includes the table-size index, so a full table can index out of bounds.
+ */
 int32_t iperflwip_tcp_server_start(void* args)
 {
     int i;

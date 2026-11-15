@@ -29,6 +29,15 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file lwip_iperf_tcp_client.c
+ * @brief CC35XX raw-lwIP TCP throughput client and timed reporting.
+ * Queues setup and reports to the TCP/IP thread; connection/ACK/poll callbacks
+ * fill the send queue. Byte totals count queued bytes, not acknowledged delivery.
+ * The shared send_buffer is borrowed without copying and must be initialized
+ * and remain stable for the session lifetime.
+ */
+
 #include <string.h>
 #include <stdio.h>
 #include "lwip/sockets.h"
@@ -79,6 +88,13 @@ static void iperflwip_client_tcp_os_timer_callback(union sigval sv);
 extern unsigned char send_buffer[];
 
 
+/**
+ * @brief Create/bind a raw IPv4 PCB and request connection.
+ * @param param Live reserved session with copied lwipConfig.
+ * @note Core callback. Resets counters, binds any address/ephemeral port, disables
+ *  Nagle and installs ACK/error/poll handlers. Setup failures clear is_running
+ *  and close a created PCB; no completion status goes to the start caller.
+ */
 static void iperflwip_client_tcp_init(void *param)
 {
     err_t err;
@@ -131,6 +147,17 @@ static void iperflwip_client_tcp_init(void *param)
 }
 
 // Connection established
+/**
+ * @brief Start sending and timed reporting after TCP connection.
+ * @param arg Valid session callback argument.
+ * @param tpcb Connected PCB expected to match the stored pointer.
+ * @param err Connection status from lwIP.
+ * @return err after closing on failure, otherwise ERR_OK.
+ * @note Core context. PCB mismatch only logs. Chooses interval from period or
+ *  timeout; the large-timeout fallback multiplies IPERF_LWIP_CLIENT_DURATION_MS
+ *  by 1000. Timer errors do not prevent sending; an unarmed timer cannot end
+ *  the test.
+ */
 err_t iperflwip_tcp_session_conected(void *arg, struct tcp_pcb *tpcb, err_t err)
 {
     session_conn_t* session_con = arg;
@@ -200,6 +227,14 @@ err_t iperflwip_tcp_session_conected(void *arg, struct tcp_pcb *tpcb, err_t err)
 }
 
 //function is been called when tcp-ack is received
+/**
+ * @brief Reset idle count and refill the TCP queue after an ACK.
+ * @param arg Valid session pointer.
+ * @param tpcb Expected session PCB; mismatch triggers LWIP_ASSERT.
+ * @param len Acknowledged byte count, unused.
+ * @return Transmit helper result (currently always ERR_OK).
+ * @note Executes in TCP/IP context.
+ */
 static err_t lwiperf_tcp_client_sent(void *arg, struct tcp_pcb *tpcb, u16_t len)
 {
     session_conn_t* session_con = arg;
@@ -217,6 +252,15 @@ static err_t lwiperf_tcp_client_sent(void *arg, struct tcp_pcb *tpcb, u16_t len)
 
 
 // Send function: chunked sending as fast as possible
+/**
+ * @brief Queue test payload while TCP send-buffer capacity remains.
+ * @param session_con Live session with a non-NULL connected PCB.
+ * @return Always ERR_OK, including tcp_write() failure.
+ * @note Core context. Chunk length defaults/caps to 1460 after narrowing the
+ *  configured size to u16_t. Successful writes update queued-byte counters.
+ *  Without TCP_WRITE_FLAG_COPY, shared send_buffer must stay unchanged until
+ *  ACKed. No explicit tcp_output() is issued; later ACK/poll callbacks retry.
+ */
 err_t iperflwip_tcp_client_tx(session_conn_t* session_con) {
     err_t err = ERR_OK;
     struct tcp_pcb * tpcb = session_con->conn_pcb_tcp;
@@ -263,6 +307,13 @@ err_t iperflwip_tcp_client_tx(session_conn_t* session_con) {
 
 
 // Timer expired -> test done
+/**
+ * @brief Print interval throughput, rearm the timer or close a finished test.
+ * @param arg Live session pointer, invoked through tcpip_callback().
+ * @note Rates use queued bytes and elapsed OSI milliseconds. Continues according
+ *  to timeout policy unless aborted; otherwise prints totals and closes.
+ *  Inactive/missing-PCB paths only log completion; timer rearm errors are ignored.
+ */
 static void iperflwip_report(void* arg)
 {
     char ratestr[IPERF_LWIP_MAX_FORMAT_RATE_LENGTH];
@@ -331,11 +382,26 @@ static void iperflwip_report(void* arg)
 }
 
 
+/**
+ * @brief Queue a report from a POSIX timer notification thread.
+ * @param sv sival_ptr holds a session live until the report finishes.
+ * @note Does not operate on raw TCP state directly; queue errors are ignored.
+ */
 static void iperflwip_client_tcp_os_timer_callback(union sigval sv)
 {
     tcpip_callback(iperflwip_report, sv.sival_ptr);
 }
 
+/**
+ * @brief Reserve a shared session and queue client setup.
+ * @param args Valid RecvCmd_t pointer copied before return.
+ * @return 0 after queuing, -1 if no candidate slot was found.
+ * @note Requires initialized lwIP and send_buffer; serialize allocation. Queue
+ *  success is unchecked and the 50-microsecond sleep is not a connection barrier.
+ *  The search includes index IPERF_LWIP_MAX_NUM_OF_IPERF_SESSIONS even though
+ *  the array has that many elements; a full table can cause an out-of-bounds
+ *  access. Options are not validated here.
+ */
 int32_t iperflwip_tcp_client_start(void* args)
 {
     int i;

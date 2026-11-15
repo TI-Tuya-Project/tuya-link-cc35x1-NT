@@ -29,6 +29,14 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file nimble_host.c
+ * @brief NimBLE host lifecycle, GAP command adapter and demonstration GATT service.
+ * Tracks scan results and connection handles, handles pairing events and bridges
+ * terminal commands to host/controller APIs. Event payloads are borrowed.
+ * Initialize the host before GAP operations; serialize lifecycle/configuration
+ * changes with its event processing. The optional extra GAP callback is synchronous.
+ */
 #include "nimble/nimble_npl.h"
 #include "nimble/nimble_port.h"
 #include "nimble/hci_common.h"
@@ -128,6 +136,11 @@ void ble_store_ram_init(void);
 /******************************************************************************
                       Function Implementations
 ******************************************************************************/
+/**
+ * @brief Reset BLE demo tracking and create the host startup signal.
+ * @note Sets display-only I/O capability. Signal creation failure asserts; call
+ *  before starting the host event task and do not reset while events are active.
+ */
 static void ble_example_init()
 {
     // Reset scan results table data
@@ -151,6 +164,10 @@ static void ble_example_init()
     
 }
 
+/**
+ * @brief Print a six-byte BLE address in conventional reversed-byte order.
+ * @param addr Borrowed six-byte address, or NULL for no output.
+ */
 static void print_addr(const void *addr)
 {
     const uint8_t *u8p;
@@ -165,6 +182,10 @@ static void print_addr(const void *addr)
                    u8p[5], u8p[4], u8p[3], u8p[2], u8p[1], u8p[0]);
 }
 
+/**
+ * @brief Print cached scan results and the total observed report count.
+ * @note Reads shared extScanCB; does not start scanning or clear the results.
+ */
 static void print_scan_results()
 {
     uint8 i;
@@ -199,6 +220,11 @@ static void print_scan_results()
     }
 }
 
+/**
+ * @brief Store a non-sentinel connection handle in the first free slot.
+ * @param conn_handle Host connection handle; BLE_HS_CONN_HANDLE_NONE is ignored.
+ * @note Increments connCount on insertion, logs when full and does not suppress duplicates.
+ */
 static void add_to_connected_peers(uint16 conn_handle)
 {
     uint8 i;
@@ -218,6 +244,11 @@ static void add_to_connected_peers(uint16 conn_handle)
     }
 }
 
+/**
+ * @brief Remove the first matching tracked connection handle.
+ * @param conn_handle Handle to clear; sentinel or unknown handles are ignored.
+ * @note Decrements the shared connection count only when a match is found.
+ */
 static void remove_from_connected_peers(uint16 conn_handle)
 {
     uint8 i;
@@ -236,6 +267,10 @@ static void remove_from_connected_peers(uint16 conn_handle)
     }
 }
 
+/**
+ * @brief Print connection descriptors for currently tracked handles.
+ * @note Skips handles no longer found by the host; does not modify the tracking table.
+ */
 static void print_connected_peers()
 {
     uint8 i;
@@ -277,6 +312,11 @@ static void print_connected_peers()
     }
 }
 
+/**
+ * @brief Request unlimited advertising on instance zero.
+ * @note Used after advertisement completion while connection capacity remains.
+ *  Ignores the adapter enable status.
+ */
 static void adv_enable(void)
 {
     ExtAdvEnable_t extAdvEnable;
@@ -289,6 +329,11 @@ static void adv_enable(void)
     nimble_host_ext_adv_enable(&extAdvEnable);
 }
 
+/**
+ * @brief Look up persisted peer security data for an existing connection.
+ * @param conn_handle Active host connection handle.
+ * @return TRUE if both descriptor and peer security record are found, otherwise FALSE.
+ */
 static int is_peer_bonded(uint16 conn_handle)
 {
     struct ble_store_key_sec key_sec;
@@ -499,6 +544,10 @@ gatt_svr_ti_peripheral_chr_access(uint16_t conn_handle, uint16_t attr_handle,
     return BLE_ATT_ERR_UNLIKELY;
 }
 
+/**
+ * @brief Count and register the demonstration TI peripheral GATT service.
+ * @return 0 on success, otherwise the first NimBLE configuration/registration error.
+ */
 static int gatt_svr_init(void)
 {
     int rc;
@@ -519,6 +568,13 @@ static int gatt_svr_init(void)
 /******************************************************************************
                       GAP EVENT CALLBACK
 ******************************************************************************/
+/**
+ * @brief Respond to security-manager passkey actions using demo policy.
+ * @param passkey_event Borrowed passkey event; NULL returns -1.
+ * @return 0 for handled/ignored actions, -1 for NULL.
+ * @note Injects the default passkey and automatically accepts numeric comparison;
+ *  OOB actions are ignored. Unknown action asserts; injection errors are ignored.
+ */
 static int gap_event_passkey_action(struct ble_gap_event *passkey_event)
 {
     uint16_t conn_handle;
@@ -568,6 +624,15 @@ static int gap_event_passkey_action(struct ble_gap_event *passkey_event)
     return (0);
 }
 
+/**
+ * @brief Handle GAP events, cache discoveries and maintain peer tracking.
+ * @param event Borrowed non-NULL GAP event valid during the callback.
+ * @param arg Callback context forwarded to the optional extra handler.
+ * @return Always 0, including logged errors.
+ * @note Runs in host event context. Initiates pairing/encryption on connection
+ *  and may restart advertising. Extra callbacks run synchronously except on
+ *  early error-return paths; do not retain borrowed event storage.
+ */
 static int gap_event_cb(struct ble_gap_event *event, void *arg)
 {
     int rc = 0;
@@ -716,12 +781,21 @@ static int gap_event_cb(struct ble_gap_event *event, void *arg)
 /******************************************************************************
                       NIMBLE HOST CB
 ******************************************************************************/
+/**
+ * @brief Log and assert a host reset notification.
+ * @param reason Host reset reason code.
+ */
 static void ble_reset_cb(int reason)
 {
     console_printf("\n\rRESET due to 0x%x\n\r",reason);
     ASSERT_GENERAL(0);
 }
 
+/**
+ * @brief Resolve local identity and signal host/controller synchronization.
+ * @note Host callback; logs addressing failures and signals the startup waiter
+ *  even if address setup or host-enabled checks failed.
+ */
 static void ble_sync_cb(void)
 {
     int rc;
@@ -767,6 +841,11 @@ static void ble_sync_cb(void)
     osi_SyncObjSignal(&hostInitEventSyncObj);
 }
 
+/**
+ * @brief Log the result of a host stop notification.
+ * @param status Zero indicates a successful stop; other values log already stopped.
+ * @param arg Unused listener context.
+ */
 static void ble_stop_cb(int status, void *arg)
 {
     if (status == 0) {
@@ -776,6 +855,11 @@ static void ble_stop_cb(int status, void *arg)
     }
 }
 
+/**
+ * @brief Install host reset/sync hooks, set the GAP name and run the event queue.
+ * @param param Unused task argument.
+ * @note nimble_port_run() services host events until the host stops.
+ */
 void nimble_host_task(void *param)
 {
     ble_hs_cfg.reset_cb = ble_reset_cb;
@@ -789,6 +873,13 @@ void nimble_host_task(void *param)
 /******************************************************************************
                       API Calls
 ******************************************************************************/
+/**
+ * @brief Configure an extended advertising instance and its payload.
+ * @param pAdvCfg Borrowed advertising settings; NULL/invalid instance is rejected.
+ * @return 0 on success, -1 for invalid settings or a host error status.
+ * @note Builds an mbuf advertising payload, including the GAP device name.
+ *  Successful set-data transfers the payload to the stack; failure releases it.
+ */
 int nimble_host_ext_adv_cfg(ExtAdvCfg_t *pAdvCfg)
 {
     struct ble_gap_ext_adv_params params = {0};
@@ -939,6 +1030,11 @@ int nimble_host_ext_adv_cfg(ExtAdvCfg_t *pAdvCfg)
     return 0;
 }
 
+/**
+ * @brief Start or stop a configured extended advertising instance.
+ * @param pAdvEnb Borrowed enable/instance/duration/event-limit settings.
+ * @return -1 for NULL/invalid instance, otherwise the NimBLE start/stop status.
+ */
 int nimble_host_ext_adv_enable(ExtAdvEnable_t *pAdvEnb)
 {
     int rc = 0;
@@ -981,6 +1077,12 @@ int nimble_host_ext_adv_enable(ExtAdvEnable_t *pAdvEnb)
     return rc;
 }
 
+/**
+ * @brief Cache extended scanning options for a later enable request.
+ * @param pScanCfg Borrowed configuration copied into extScanCB.
+ * @return 0 when copied, -1 for NULL.
+ * @note Does not start scanning or validate all timing/PHY combinations.
+ */
 int nimble_host_ext_scan_cfg(ExtScanCfg_t *pScanCfg)
 {
     int rc = 0;
@@ -1008,6 +1110,12 @@ int nimble_host_ext_scan_cfg(ExtScanCfg_t *pScanCfg)
     return rc;
 }
 
+/**
+ * @brief Enable or cancel extended scanning with the cached configuration.
+ * @param pScanEnb Borrowed enable/duration/period/duplicate-filter options.
+ * @return -1 for NULL, otherwise NimBLE discovery/cancel status.
+ * @note Clears cached scan results for either operation; discovery is asynchronous.
+ */
 int nimble_host_ext_scan_enable(ExtScanEnable_t *pScanEnb)
 {
     int rc = 0;
@@ -1074,6 +1182,13 @@ int nimble_host_ext_scan_enable(ExtScanEnable_t *pScanEnb)
     return rc;
 }
 
+/**
+ * @brief Request an extended connection using the inferred own-address type.
+ * @param bd_addr Required six-byte peer address copied into a local descriptor.
+ * @param addr_type Peer address type.
+ * @return NimBLE connection-request status; 0 does not mean connected.
+ * @note Enables 1M/2M PHY selection and reports completion through GAP events.
+ */
 int nimble_host_ext_connect(uint8_t* bd_addr, uint8_t addr_type)
 {
     int rc = 0;
@@ -1099,6 +1214,17 @@ int nimble_host_ext_connect(uint8_t* bd_addr, uint8_t addr_type)
     return rc;
 }
 
+/**
+ * @brief Request a connection using explicit PHY and timing parameters.
+ * @param bd_addr Required six-byte peer address.
+ * @param addr_type Peer address type.
+ * @param phy_mask Requested PHY mask.
+ * @param interval_min_us Minimum connection interval in microseconds; 0 uses default.
+ * @param interval_max_us Maximum connection interval in microseconds; 0 uses default.
+ * @param supervision_timeout_us Supervision timeout in microseconds; 0 uses default.
+ * @return NimBLE request status; completion arrives through GAP events.
+ * @note Uses the public own-address type and converts timings to stack units.
+ */
 int nimble_host_ext_connect_params(uint8_t* bd_addr, uint8_t addr_type, uint8 phy_mask, uint32 interval_min_us, uint32 interval_max_us, uint32 supervision_timeout_us)
 {
     struct ble_gap_conn_params conn_params = {
@@ -1135,6 +1261,17 @@ int nimble_host_ext_connect_params(uint8_t* bd_addr, uint8_t addr_type, uint8 ph
     return rc;
 }
 
+/**
+ * @brief Request connection-parameter changes for a live handle.
+ * @param connHandle Host connection handle.
+ * @param interval_min_us Minimum interval in microseconds; 0 uses default.
+ * @param interval_max_us Maximum interval in microseconds; 0 uses default.
+ * @param supervision_timeout_us Supervision timeout in microseconds; 0 uses default.
+ * @param latency Existing implementation converts nonzero input using interval units.
+ * @param min_ce_len Ignored; the default minimum event length is used.
+ * @param max_cle_len Ignored; the default maximum event length is used.
+ * @return ble_gap_update_params() request status.
+ */
 int nimble_host_gap_update_params(uint16 connHandle, uint32 interval_min_us, uint32 interval_max_us, uint32 supervision_timeout_us, uint32 latency, uint16 min_ce_len, uint16 max_cle_len)
 {
     struct ble_gap_upd_params upd_params = {
@@ -1149,6 +1286,14 @@ int nimble_host_gap_update_params(uint16 connHandle, uint32 interval_min_us, uin
     return ble_gap_update_params(connHandle, &upd_params);
 }
 
+/**
+ * @brief Request disconnection from one peer or all tracked peers.
+ * @param bd_addr Required six-byte address; all zeros selects all peers.
+ * @param addr_type Peer address type for a single-peer lookup.
+ * @return Lookup/termination status; in the all-peer path individual termination
+ *  results are ignored and tracking entries are cleared immediately.
+ * @note Requests are asynchronous; a successful return is not a disconnect barrier.
+ */
 int nimble_host_ext_disconnect(uint8_t* bd_addr, uint8_t addr_type)
 {
     int rc = 0;
@@ -1205,12 +1350,21 @@ int nimble_host_ext_disconnect(uint8_t* bd_addr, uint8_t addr_type)
     return rc;
 }
 
+/**
+ * @brief Print the tracked peer table.
+ * @return Always 0.
+ */
 int nimble_host_connected_peers(void)
 {
     print_connected_peers();
     return (0);
 }
 
+/**
+ * @brief Request all disconnections and clear persisted BLE security records.
+ * @return Store-clear status, or 0 after logging that the host is disabled.
+ * @note Does not wait for requested disconnections before clearing the store.
+ */
 int nimble_host_delete_all_bond_info(void)
 {
     int rc;
@@ -1237,6 +1391,11 @@ int nimble_host_delete_all_bond_info(void)
     return 0;
 }
 
+/**
+ * @brief Print the local identity address of the requested type.
+ * @param addr_type NimBLE identity address type.
+ * @return Identity-copy status, or 0 after logging a disabled host.
+ */
 int nimble_host_get_bd_address(uint8_t addr_type)
 {
     int rc;
@@ -1271,6 +1430,12 @@ int nimble_host_get_bd_address(uint8_t addr_type)
     return rc;
 }
 
+/**
+ * @brief Select the public identity or generate/set a random identity.
+ * @param addr_type BLE_OWN_ADDR_PUBLIC or BLE_OWN_ADDR_RANDOM.
+ * @return 0 on success or disabled-host no-op; -1 for unsupported type/setup failure.
+ * @note Public selection changes own_addr_type without rewriting the public address.
+ */
 int nimble_host_set_bd_address(uint8_t addr_type)
 {
     ble_addr_t addr;
@@ -1322,6 +1487,11 @@ int nimble_host_set_bd_address(uint8_t addr_type)
     return 0;
 }
 
+/**
+ * @brief Send the vendor-specific controller TX-power command.
+ * @param tx_power_index Controller power index, not a direct dBm value.
+ * @return -1 when disabled, otherwise controller command status.
+ */
 int nimble_host_set_tx_power(uint8_t tx_power_index)
 {
     struct ble_hci_vs_set_tx_pwr_cp cmd;
@@ -1349,6 +1519,15 @@ int nimble_host_set_tx_power(uint8_t tx_power_index)
     return 0;
 }
 
+/**
+ * @brief Request preferred LE PHY values for a connection.
+ * @param conn_handle Active connection handle.
+ * @param tx_phys_mask Transmit PHY mask.
+ * @param rx_phys_mask Receive PHY mask.
+ * @param phy_opts Coded-PHY options interpreted by the stack.
+ * @return 0 on accepted request, -1 if disabled or the stack request fails.
+ * @note Actual completion is reported by the PHY update GAP event.
+ */
 int nimble_host_set_phy(uint16_t conn_handle, uint8_t tx_phys_mask, uint8_t rx_phys_mask, uint16_t phy_opts)
 {
     int rc;
@@ -1370,6 +1549,13 @@ int nimble_host_set_phy(uint16_t conn_handle, uint8_t tx_phys_mask, uint8_t rx_p
     return rc;
 }
 
+/**
+ * @brief Enable BLE, initialize host/services/storage and launch the host task.
+ * @return Enable error, -1 for synchronization wait failure, otherwise 0.
+ * @note Task-context call; waits up to OSI_WAIT_FOR_SECOND and deletes its startup
+ *  signal. Some initialization results are ignored; task/signal failures assert.
+ *  A zero return means the sync signal arrived, not that every setup step succeeded.
+ */
 int nimble_host_start(void)
 {
     int rc = 0;
@@ -1428,6 +1614,12 @@ int nimble_host_start(void)
     return status;
 }
 
+/**
+ * @brief Request host stop, reset GATT and remove the queue/task.
+ * @return 0 when already stopped or task removal succeeds, otherwise removal status.
+ * @note Uses a static stop listener; stop notification is asynchronous. Does not
+ *  expose all underlying stop/reset errors or disable the controller here.
+ */
 int nimble_host_stop(void)
 {
     static struct ble_hs_stop_listener listener;
@@ -1453,11 +1645,20 @@ int nimble_host_stop(void)
     return 0;
 }
 
+/**
+ * @brief Query the NimBLE host enabled state.
+ * @return ble_hs_is_enabled() result.
+ */
 int nimble_host_is_enabled(void)
 {
     return ble_hs_is_enabled();
 }
 
+/**
+ * @brief Replace the optional synchronous GAP-event observer.
+ * @param cb Callback receiving borrowed event/context pointers; NULL disables it.
+ * @note No locking or callback ownership transfer; register before concurrent events.
+ */
 void register_extra_gap_event_cb(void (*cb)(void *, void *))
 {
     extra_gap_event_cb = cb;

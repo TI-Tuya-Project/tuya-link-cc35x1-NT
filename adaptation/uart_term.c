@@ -29,8 +29,17 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-/*
- *  Terminal
+/**
+ * @file uart_term.c
+ * @brief UART console with ANSI line editing, command history and tab completion.
+ *
+ * InitTerm() opens the SysConfig UART at 115200 baud and creates LockObj.
+ * Initialize completion candidates before accepting tab input. Use one command
+ * reader: history, completion and editor state are shared without locking.
+ * writeStrWithLen() locks individual writes; direct character output and the
+ * heap-backed Report() path do not. Multi-part messages can interleave.
+ * Use task context for routines that allocate, lock or access the UART.
+ * DeinitTerm() releases the UART and lock, not history or completion storage.
  */
 
 // Standard includes
@@ -75,8 +84,6 @@ int8_t nextHead();
 //*****************************************************************************
 //                 GLOBAL VARIABLES
 //*****************************************************************************
-//static UART_Handle uartHandle;
-//static UART_Transaction uartTrans;
 
 //char constants
 static const uint8_t ALERT        = '\a';
@@ -114,6 +121,10 @@ typedef struct CommandHistory_t
 
 CommandHistory hist;
 
+/**
+ * @brief Run a short uncalibrated busy loop.
+ * @note No guaranteed duration; optimization may remove the loop.
+ */
 inline void UART_DELAY()   {uint8_t i; for(i=0;i<50;i++);}//delay
 
 #define TERMINAL_TAB_COMPLETION
@@ -177,11 +188,22 @@ void freeCompletionArray()
     free(comp.strLens);
 }
 
+/**
+ * @brief Free the suffix owned by a completion result.
+ * @param res Valid result pointer; its completion member may be NULL.
+ * @note Does not free the result structure or reset its members.
+ */
 void freeCompletionResult(CompletionResult *res)
 {
     free(res->completion);
 }
 
+/**
+ * @brief Placeholder for candidate output; currently emits nothing.
+ * @param candidateIdx Valid index in the initialized candidate array.
+ * @param inputLen Existing prefix length.
+ * @param charBuf Unused output buffer.
+ */
 void writeCandidate(uint8_t candidateIdx, uint8_t inputLen, char *charBuf)
 {
     uint8_t candidateLen = comp.strLens[candidateIdx];
@@ -192,6 +214,13 @@ void writeCandidate(uint8_t candidateIdx, uint8_t inputLen, char *charBuf)
 
 }
 
+/**
+ * @brief Get one character from a completion candidate.
+ * @param candIdx Candidate index.
+ * @param chPos Valid offset within an in-range candidate string.
+ * @return Candidate character, or NUL for an out-of-range candidate index.
+ * @note Character offsets are not bounds-checked.
+ */
 char getCandidateChar(uint8_t candIdx, uint8_t chPos)
 {
     if (candIdx < comp.len)
@@ -204,6 +233,16 @@ char getCandidateChar(uint8_t candIdx, uint8_t chPos)
     }
 }
 
+/**
+ * @brief Find the common suffix extension of candidates matching a prefix.
+ * @param input Buffer containing at least inputLen prefix bytes.
+ * @param inputLen Nonzero prefix length; zero triggers an assertion.
+ * @return Result with an owned NUL-terminated suffix or NULL, its length, and
+ *  shouldRefresh set if ambiguous candidates were printed. Release the suffix
+ *  with freeCompletionResult().
+ * @note Requires initialized candidates. Prints matches in three columns if
+ *  multiple candidates share no extension. Suffix allocation is not checked.
+ */
 CompletionResult complete(char *input, uint8_t inputLen)
 {
     int i;
@@ -319,6 +358,13 @@ void InitTerm(void)
 }
 
 
+/**
+ * @brief Send a buffer one byte at a time through putch().
+ * @param buffer Source containing at least len bytes.
+ * @param len Number of bytes, including any embedded NUL bytes.
+ * @note No lock or error reporting. Despite its name, this calls UART2_write()
+ *  via putch(), using the configured driver mode.
+ */
 void UART_writePolling(uint8_t *buffer, uint32_t len)
 {
     uint32_t uartIter;
@@ -329,15 +375,12 @@ void UART_writePolling(uint8_t *buffer, uint32_t len)
     }
 }
 
-//void UART_readPolling(UART_Handle handle, uint8_t *buffer, uint32_t len)
-//{
-//    uartTrans.buf = buffer;
-//    uartTrans.count = len;
-//
-//    UART_read(handle, &uartTrans);
-//}
-
-
+/**
+ * @brief Write exactly len bytes while holding the terminal output lock.
+ * @param s Valid source containing len bytes.
+ * @param len Byte count to transmit.
+ * @note Waits indefinitely for LockObj; requires InitTerm().
+ */
 void writeStrWithLen(const char *s, size_t len)
 {
     osi_LockObjLock(&LockObj, OSI_WAIT_FOREVER);
@@ -345,18 +388,31 @@ void writeStrWithLen(const char *s, size_t len)
     osi_LockObjUnlock(&LockObj);
 }
 
+/**
+ * @brief Write a NUL-terminated string through the locked byte writer.
+ * @param s Valid string; its terminator is not transmitted.
+ */
 void writeStr(const char *s)
 {
     size_t len = strlen(s);
     writeStrWithLen(s, len);
 }
 
+/**
+ * @brief Write a NUL-terminated unsigned-character string.
+ * @param us Valid byte string; delegates to writeStr().
+ */
 void writeUStr(const uint8_t *us)
 {
     writeStr((const char *)us);
 }
 
 //positive values move cursor to the right, negative values move cursor to the left.
+/**
+ * @brief Emit an ANSI horizontal cursor movement sequence using Report().
+ * @param positionsToMove Positive moves right; negative moves left.
+ * @note Does not update command editor indices.
+ */
 void moveCursor(int8_t positionsToMove)
 {
     //choose escape sequence depending on if we're moving right or left
@@ -379,14 +435,6 @@ void moveCursor(int8_t positionsToMove)
 //! \return count of characters printed
 //
 //*****************************************************************************
-//TODO! if want to use static buffer for the report, which is better,
-//need to create buffer per thread
-//Using the same buffer with lock is not working well,
-//Because vsnprintf sometimes gets asserted if it is wrapped with lock
-//The reason is that the lock create high latency if it is been used
-//for long time.and the operating system can't wait long when priority inversion
-//is happening.it can be verified in stability tests, you can see that vsprintf
-//gets asserted.
 
 #define USE_HEAP_BUF
 #ifdef COLLECT_HEAP_DEBUG_INFO
@@ -397,6 +445,17 @@ char gPcBuff[900];
 #endif
 #endif
 
+/**
+ * @brief Format a message and transmit it through Message().
+ * @param pcFormat Valid printf-style format followed by matching arguments.
+ * @return Formatted character count, or -1 on allocation/format-capacity failure.
+ *  UART transmission errors are not reflected in the result.
+ * @note USE_HEAP_BUF is defined here: allocates 256 bytes, doubles capacity and
+ *  retries with a fresh va_list until formatting fits, then frees the buffer.
+ *  Output is unlocked and may interleave. The alternate static-buffer branch
+ *  locks and rejects oversized messages. On heap-growth failure the existing
+ *  buffer is still passed to Message().
+ */
 int Report(const char *pcFormat,...)
 {
 
@@ -468,6 +527,13 @@ int Report(const char *pcFormat,...)
 
 #ifdef COLLECT_HEAP_DEBUG_INFO
 char gPcBuff[900];
+/**
+ * @brief Format a heap-debug message without allocation or locking.
+ * @param pcFormat Valid printf-style format followed by matching arguments.
+ * @return Formatted length, or -1 if formatting fails or needs 898 bytes or more.
+ * @note Only compiled with COLLECT_HEAP_DEBUG_INFO. Uses shared gPcBuff;
+ *  callers must prevent concurrent use. UART errors are not reported.
+ */
 int ReportNoLock(const char *pcFormat,...)
 {
 
@@ -501,6 +567,13 @@ int ReportNoLock(const char *pcFormat,...)
 #endif
 
 
+/**
+ * @brief Start a prompt line or clear its current editable area.
+ * @param linePrefix Valid NUL-terminated prompt string.
+ * @param clearLine Nonzero emits a line break and prompt; zero returns to the
+ *  line start, skips the existing prompt and erases the remaining text.
+ * @note The zero branch assumes the prompt is already displayed.
+ */
 void startNewLine(const char *linePrefix, uint8_t clearLine)
 {
     size_t prefixLen = strlen(linePrefix);
@@ -519,6 +592,11 @@ void startNewLine(const char *linePrefix, uint8_t clearLine)
     
 }
 
+/**
+ * @brief Test whether a byte is printable ASCII.
+ * @param c Byte to test.
+ * @return 1 for space through tilde (0x20-0x7e), otherwise 0.
+ */
 uint8_t is_ascii_printable(uint8_t c)
 {
     return ( (' ' <= c) && (c <= '~') );
@@ -792,6 +870,11 @@ int GetCmd(char *charBuf, unsigned int maxLen, const char *linePrefix)
     return endPos;
 }
 
+/**
+ * @brief Move the history iterator toward an older command.
+ * @return Borrowed stored string, or NULL at the oldest boundary.
+ * @note Do not free the result; later history updates can replace its storage.
+ */
 uint8_t *prevHistoryCommand()
 {
     //check if we've already reached the earliest command,
@@ -823,6 +906,11 @@ uint8_t *prevHistoryCommand()
     return hist.buf[hist.iterCursor];
 }
 
+/**
+ * @brief Move the history iterator toward a newer slot.
+ * @return Borrowed slot string, possibly NULL; NULL also marks the head boundary.
+ * @note Advances iterCursor unless already at head. Do not free the result.
+ */
 uint8_t *nextHistoryCommand()
 {
     //check if we've already reached the latest command,
@@ -836,6 +924,11 @@ uint8_t *nextHistoryCommand()
     return hist.buf[hist.iterCursor];
 }
 
+/**
+ * @brief Compute the slot preceding the next history insertion position.
+ * @return Previous index, wrapping when full, or zero at the initial boundary.
+ * @note Does not change state or guarantee the slot contains a command.
+ */
 int8_t prevHead()
 {
     if (hist.head > 0)
@@ -853,11 +946,22 @@ int8_t prevHead()
 
 }
 
+/**
+ * @brief Compute the next history insertion index without changing state.
+ * @return (hist.head + 1) modulo CMD_HISTORY_LEN.
+ */
 int8_t nextHead()
 {
     return ( (hist.head + 1) % CMD_HISTORY_LEN );
 }
 
+/**
+ * @brief Copy a command into the ring unless it repeats the latest entry.
+ * @param cmd Non-NULL, NUL-terminated command; contents are copied.
+ * @note Reallocates the insertion slot, advances head, marks full on wrap and
+ *  resets the iterator. Immediate duplicates leave state unchanged. Allocation
+ *  failure is not checked; previously returned slot pointers may become stale.
+ */
 void pushCommand(char *cmd)
 {
     ASSERT_GENERAL(cmd != NULL);
@@ -898,6 +1002,13 @@ void pushCommand(char *cmd)
 //!       called in task/thread context only.
 //
 //*****************************************************************************
+/**
+ * @brief Send a NUL-terminated string through the selected platform backend.
+ * @param str Valid string; its terminator is not transmitted.
+ * @note UART_NONPOLLING selects UART_write(); otherwise CC33XX/CC35XX choose
+ *  their writer signatures. With no matching branch, emits nothing. Does not
+ *  acquire LockObj or report driver status.
+ */
 void Message(const char *str)
 {
 #ifdef UART_NONPOLLING
@@ -921,6 +1032,10 @@ void Message(const char *str)
 //! \return none
 //
 //*****************************************************************************
+/**
+ * @brief Send the ANSI clear-screen sequence followed by carriage return.
+ * @note Uses the locked string writer; requires InitTerm().
+ */
 void ClearTerm()
 {
     writeUStr(CLEAR_TERMINAL);
@@ -935,6 +1050,12 @@ void ClearTerm()
 //! \return Character
 //
 //*****************************************************************************
+/**
+ * @brief Request one byte from the initialized UART2 console.
+ * @return Received byte converted to char.
+ * @note Driver status and bytesRead are ignored; no error indication is provided
+ *  if the read fails or completes without a byte.
+ */
 char getch(void)
 {
     #define UART_CHAR_RECIEVED       0
@@ -971,9 +1092,15 @@ char getch(void)
 //! \param size size of bytes to read
 //! \param buffer of bytes 
 //!
-//! \return str
+//! \return none
 //
 //*****************************************************************************
+/**
+ * @brief Request a block of bytes from the initialized UART2 console.
+ * @param size Requested byte count.
+ * @param[out] buffer Writable destination containing at least size bytes.
+ * @note Does not append NUL, report bytesRead or check driver status.
+ */
 void getstr(uint32_t size, void* buffer)
 {
     size_t bytesRead;
@@ -989,6 +1116,11 @@ void getstr(uint32_t size, void* buffer)
 //! \return none
 //
 //*****************************************************************************
+/**
+ * @brief Request transmission of one byte through UART2.
+ * @param ch Character byte to send.
+ * @note Requires InitTerm(); does not lock or check driver status.
+ */
 void putch(char ch)
 {
     size_t bytesWritten;
@@ -1005,6 +1137,12 @@ void putch(char ch)
 //! \return none
 //
 //*****************************************************************************
+/**
+ * @brief Close the UART and delete the output lock.
+ * @note Stop terminal users first. Resets uartHandle to NULL but does not free
+ *  history/completion storage. Lock deletion is unconditional; pair with one
+ *  initialization rather than calling repeatedly.
+ */
 void DeinitTerm(void)
 {
     if (uartHandle != NULL)

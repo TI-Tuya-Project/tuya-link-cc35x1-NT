@@ -29,6 +29,15 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file network_lwip.c
+ * @brief Bridge TI WLAN Ethernet frames and STA/AP interfaces to lwIP.
+ * Owns static netif objects, DHCP mode flags and one extra status callback.
+ * Initialize the TCP/IP thread before adding interfaces. Public interface
+ * mutation wrappers take the lwIP core lock; internal callbacks require the
+ * core context/lock. Packet callbacks copy RX data and flatten chained TX data.
+ * No interface storage is transferred to callers of the interface getters.
+ */
 /* C runtime includes */
 #include <stdio.h>
 #include <stdarg.h>
@@ -225,6 +234,14 @@ static uint8_t ap_ip_mode = IP_DHCP;
 static void (*extra_status_callback)(WlanRole_e roleid, uint32_t address);
 
 
+/**
+ * @brief Query a station ARP entry and poll for its resolution.
+ * @param ip_addr Valid pointer to an ip4_addr_t target address.
+ * @return ERR_OK if resolved; ERR_CONN if STA is down or no reply arrives;
+ *  otherwise the error from etharp_query().
+ * @note Sends the query under the core lock, then polls at 10 ms intervals for
+ *  up to 3000 ms. Sleeps in task context; do not call while holding the core lock.
+ */
 int update_arp(void* ip_addr)
 {
     err_t result = ERR_CONN;
@@ -271,6 +288,14 @@ int update_arp(void* ip_addr)
     return result;
 }
 
+/**
+ * @brief Update MAC/IP bookkeeping and notify application address waiters.
+ * @param state_netif Valid lwIP interface whose status/address changed.
+ * @note Runs in lwIP core context. Maps STA/AP roles (AP is reported as STA
+ *  during P2P grouping). On an up interface, copies its MAC, updates the shared
+ *  acquisition flag, signals the DHCP waiter for nonzero IPv4 and invokes the
+ *  optional extra callback even for zero IPv4. The down branch only logs.
+ */
 void status_callback(struct netif *state_netif)
 {
     WlanRole_e roleid = WLAN_ROLE_NONE;
@@ -332,6 +357,11 @@ void status_callback(struct netif *state_netif)
 }
 
 
+/**
+ * @brief Print the first eight buffer bytes in hexadecimal for debugging.
+ * @param in Source containing at least eight readable bytes.
+ * @param len Ignored; does not bound the read.
+ */
 void printBuffer(uint8_t *in,uint32_t len)
 {
     int j, total;
@@ -350,6 +380,15 @@ void printBuffer(uint8_t *in,uint32_t len)
     }
 }
 
+/**
+ * @brief Copy a received WLAN Ethernet frame into lwIP input storage.
+ * @param roleId WLAN_ROLE_STA or WLAN_ROLE_AP; other roles drop the frame.
+ * @param inBuf Borrowed frame bytes, valid for inLen bytes during this call.
+ * @param inLen Number of bytes to copy.
+ * @note Allocates a pool pbuf and submits it to tcpip_input(), transferring
+ *  ownership on success and freeing on failure. Assumes the first pbuf payload
+ *  has contiguous room for the entire frame; does not copy across a pbuf chain.
+ */
 void network_recv(WlanRole_e roleId, uint8_t *inBuf, uint32_t inLen)
 {
     struct netif *pIf = NULL;
@@ -389,6 +428,13 @@ void network_recv(WlanRole_e roleId, uint8_t *inBuf, uint32_t inLen)
     }
 }
 
+/**
+ * @brief Register RX delivery and start/stop DHCP services on link changes.
+ * @param state_netif Valid STA/AP interface; runs in lwIP core context.
+ * @note Link-up registers network_recv. STA starts DHCP when appropriate or
+ *  announces its retained address; AP starts the DHCP server and announces its
+ *  address. Link-down unregisters RX and stops the role's DHCP service.
+ */
 void link_callback(struct netif *state_netif)
 {
     WlanRole_e roleid = WLAN_ROLE_NONE;
@@ -459,6 +505,16 @@ void link_callback(struct netif *state_netif)
 
 
 
+/**
+ * @brief Forward an lwIP Ethernet packet to the selected WLAN role.
+ * @param netif Valid output interface; staif selects STA, all others select AP.
+ * @param p Borrowed non-NULL pbuf chain; ownership stays with lwIP.
+ * @return ERR_MEM below the heap threshold or on temporary allocation failure;
+ *  otherwise ERR_OK, even if the interface is down or WLAN sending fails.
+ * @note Flattens chained payloads into allocated storage and borrows single
+ *  payloads. Requires core context. The existing chain loop leaves currentPacket
+ *  NULL and cleanup dereferences it; chained TX has a cleanup defect.
+ */
 err_t network_send(struct netif *netif, struct pbuf *p)
 {
     WlanRole_e role;
@@ -525,6 +581,12 @@ err_t network_send(struct netif *netif, struct pbuf *p)
 }
 
 
+/**
+ * @brief Mark an interface administratively and physically up.
+ * @param newif Valid registered struct netif pointer.
+ * @note Requires lwIP core context/lock. Sets Ethernet MTU; STATIC_IP builds
+ *  first replace non-AP DHCP configuration with the compiled static address.
+ */
 void tcpinternal_network_set_up(void *newif)
 {
     struct netif *nif = newif;
@@ -561,6 +623,11 @@ void tcpinternal_network_set_up(void *newif)
     netif_set_link_up(nif);
 }
 
+/**
+ * @brief Mark an interface administratively and physically down.
+ * @param newif Valid struct netif pointer.
+ * @note Requires core context/lock. Updates MTU; link callbacks stop DHCP.
+ */
 void tcpinternal_network_set_down(void *newif)
 {
     struct netif *nif = newif;
@@ -570,6 +637,13 @@ void tcpinternal_network_set_down(void *newif)
 
 }
 
+/**
+ * @brief Initialize station netif callbacks, addressing support and flags.
+ * @param newif Interface being added by netif_add().
+ * @return Always 0.
+ * @note Core-context initializer. Installs shared DHCP/AutoIP storage and signals
+ *  staRoleupSyncObj when present; does not itself set link up.
+ */
 signed char _role_sta_up(struct netif *newif)
 {
     netif_set_status_callback(newif, status_callback);
@@ -598,6 +672,12 @@ signed char _role_sta_up(struct netif *newif)
     return 0;
 }
 
+/**
+ * @brief Initialize AP netif callbacks, Ethernet output and flags.
+ * @param newif Interface being added by netif_add().
+ * @return Always 0.
+ * @note Core-context initializer; does not attach STA DHCP/AutoIP storage.
+ */
 signed char _role_ap_up(struct netif *newif)
 {
     netif_set_status_callback(newif, status_callback);
@@ -621,6 +701,13 @@ signed char _role_ap_up(struct netif *newif)
     return 0;
 }
 
+/**
+ * @brief Register the station interface if it is not administratively up.
+ * @param ctx Unused callback context.
+ * @note Requires core context/lock. Clears staif, adds it with zero IPv4 values
+ *  and makes it default. netif_add() failure is not checked. The up-state guard
+ *  does not distinguish an already registered but down interface.
+ */
 void tcpip_network_stack_add_if_sta(void *ctx)
 {
     ip4_addr_t ipaddr, netmask, gw;
@@ -639,6 +726,12 @@ void tcpip_network_stack_add_if_sta(void *ctx)
     }
 }
 
+/**
+ * @brief Bring down and remove the station interface and clear its ARP entries.
+ * @param ctx Unused callback context.
+ * @note Requires core context/lock and an initialized staRoledownSyncObj, which
+ *  is signaled after removal.
+ */
 void tcpip_network_stack_remove_if_sta(void *ctx)
 {
     struct netif *pNetIf = &staif;
@@ -648,6 +741,12 @@ void tcpip_network_stack_remove_if_sta(void *ctx)
     osi_SyncObjSignal(&app_CB.CON_CB.staRoledownSyncObj);
 }
 
+/**
+ * @brief Register the AP interface while preserving its configured IPv4 tuple.
+ * @param ctx Unused callback context.
+ * @note Requires core context/lock. Uses the up-state guard and does not check
+ *  netif_add() success; caller must manage registration lifecycle.
+ */
 void tcpip_network_stack_add_if_ap(void *ctx)
 {
     ip4_addr_t ipaddr, netmask, gw;
@@ -667,6 +766,11 @@ void tcpip_network_stack_add_if_ap(void *ctx)
     }
 }
 
+/**
+ * @brief Bring down and remove the AP interface.
+ * @param ctx Unused callback context.
+ * @note Requires core context/lock; static apif storage remains allocated.
+ */
 void tcpip_network_stack_remove_if_ap(void *ctx)
 {
     struct netif *pNetIf = &apif;
@@ -677,6 +781,11 @@ void tcpip_network_stack_remove_if_ap(void *ctx)
 /* This function initializes this lwIP test. When NO_SYS=1, this is done in
  * the main_loop context (there is no other one), when NO_SYS=0, this is done
  * in the tcpip_thread context */
+/**
+ * @brief Signal completion of tcpip_init() to its waiting caller.
+ * @param arg Non-NULL pointer to the caller's live sys_sem_t.
+ * @note Called by the TCP/IP thread; does not retain the semaphore pointer.
+ */
 void tcpip_network_internal_init(void * arg)
 { /* remove compiler warning */
   sys_sem_t *init_sem;
@@ -687,17 +796,32 @@ void tcpip_network_internal_init(void * arg)
 
 /*************************** network API *****************************/
 
+/**
+ * @brief Return the station interface storage.
+ * @return Borrowed pointer to static staif, regardless of registration/link state.
+ * @note Do not free it; mutations require lwIP core synchronization.
+ */
 void * network_get_sta_if()
 {
     return (void *)&staif;
 }
 
+/**
+ * @brief Return the access-point interface storage.
+ * @return Borrowed pointer to static apif, regardless of registration/link state.
+ * @note Do not free it; mutations require lwIP core synchronization.
+ */
 void * network_get_ap_if()
 {
     return (void *)&apif;
 }
 
 
+/**
+ * @brief Bring an interface up under the lwIP core lock.
+ * @param newif Valid registered struct netif pointer.
+ * @note Task-context wrapper around tcpinternal_network_set_up().
+ */
 void network_set_up(void *newif)
 {
     //tcpip_callback(tcpinternal_network_set_up, newif);
@@ -710,6 +834,12 @@ void network_set_up(void *newif)
 }
 
 
+/**
+ * @brief Bring an up interface down under the lwIP core lock.
+ * @param newif Valid non-NULL struct netif pointer.
+ * @note The initial up-state test occurs before locking; callers must serialize
+ *  interface lifecycle changes.
+ */
 void network_set_down(void *newif)
 {    /* suspect need to move to when there is wlan connect event */
     if(netif_is_up((struct netif *)newif))
@@ -724,6 +854,11 @@ void network_set_down(void *newif)
     }
 }
 
+/**
+ * @brief Perform station registration under the lwIP core lock.
+ * @note Task-context wrapper; requires network_stack_init() and a valid interface
+ *  lifecycle. Does not return registration/removal status.
+ */
 void network_stack_add_if_sta()
 {
     LOCK_TCPIP_CORE();
@@ -733,6 +868,11 @@ void network_stack_add_if_sta()
     UNLOCK_TCPIP_CORE();
 }
 
+/**
+ * @brief Perform station removal under the lwIP core lock.
+ * @note Task-context wrapper; requires network_stack_init() and a valid interface
+ *  lifecycle. Does not return registration/removal status.
+ */
 void network_stack_remove_if_sta()
 {
     //tcpip_callback(tcpip_network_stack_remove_if_sta, NULL);
@@ -743,6 +883,11 @@ void network_stack_remove_if_sta()
     UNLOCK_TCPIP_CORE();
 }
 
+/**
+ * @brief Perform AP registration under the lwIP core lock.
+ * @note Task-context wrapper; requires network_stack_init() and a valid interface
+ *  lifecycle. Does not return registration/removal status.
+ */
 void network_stack_add_if_ap()
 {
     //tcpip_callback(tcpip_network_stack_add_if_ap, NULL);
@@ -753,6 +898,11 @@ void network_stack_add_if_ap()
     UNLOCK_TCPIP_CORE();
 }
 
+/**
+ * @brief Perform AP removal under the lwIP core lock.
+ * @note Task-context wrapper; requires network_stack_init() and a valid interface
+ *  lifecycle. Does not return registration/removal status.
+ */
 void network_stack_remove_if_ap()
 {
     //tcpip_callback(tcpip_network_stack_remove_if_ap, NULL);
@@ -764,6 +914,11 @@ void network_stack_remove_if_ap()
 
 }
 
+/**
+ * @brief Start the lwIP TCP/IP thread and wait for initialization completion.
+ * @note Task-context startup call; creates, waits on and frees a local semaphore.
+ *  Semaphore creation errors are not checked. Initialize once before netif APIs.
+ */
 void network_stack_init()
 {
     sys_sem_t init_sem;
@@ -773,16 +928,33 @@ void network_stack_init()
     sys_sem_free(&init_sem);
 }
 
+/**
+ * @brief Store the AP IP-mode flag without changing the interface or DHCP server.
+ * @param mode IP_DHCP or IP_STATIC; narrowed to uint8_t without validation.
+ * @note Does not take the core lock; serialize configuration calls.
+ */
 void network_stack_set_ap_ip_mode(uint32_t mode)
 {
     ap_ip_mode = mode;
 }
 
+/**
+ * @brief Store the STA IP-mode flag without starting or stopping DHCP.
+ * @param mode IP_DHCP or IP_STATIC; narrowed to uint8_t without validation.
+ * @note Does not take the core lock; serialize configuration calls.
+ */
 void network_stack_set_sta_ip_mode(uint32_t mode)
 {
     sta_ip_mode = mode;
 }
 
+/**
+ * @brief Stop/release STA DHCP and apply static addressing.
+ * @param ip IPv4 address in lwIP/network byte order.
+ * @param netmask IPv4 mask in lwIP/network byte order.
+ * @param gw IPv4 gateway in lwIP/network byte order.
+ * @note Takes the core lock; requires a configured interface. Records IP_STATIC after updating the tuple.
+ */
 void network_stack_set_static_ip_if_sta(uint32_t ip, uint32_t netmask, uint32_t gw)
 {
     ip4_addr_t ip_addr = { .addr = ip };
@@ -804,6 +976,11 @@ void network_stack_set_static_ip_if_sta(uint32_t ip, uint32_t netmask, uint32_t 
     }
 }
 
+/**
+ * @brief Clear station addressing and restart its DHCP client under the core lock.
+ * @note Stops/releases DHCP, clears the address tuple, restarts DHCP and records
+ *  IP_DHCP. Requires initialized/registered STA; DHCP results are not checked.
+ */
 void network_stack_set_dynamic_ip_if_sta()
 {
     struct netif *pNetIf = network_get_sta_if();
@@ -824,6 +1001,13 @@ void network_stack_set_dynamic_ip_if_sta()
     }
 }
 
+/**
+ * @brief Apply the AP address tuple without changing its stored mode.
+ * @param ip IPv4 address in lwIP/network byte order.
+ * @param netmask IPv4 mask in lwIP/network byte order.
+ * @param gw IPv4 gateway in lwIP/network byte order.
+ * @note Takes the core lock; requires a configured interface. Does not start/stop the DHCP server or set ap_ip_mode.
+ */
 void network_stack_set_static_ip_if_ap(uint32_t ip, uint32_t netmask, uint32_t gw)
 {
     ip4_addr_t ip_addr = { .addr = ip };
@@ -841,6 +1025,14 @@ void network_stack_set_static_ip_if_ap(uint32_t ip, uint32_t netmask, uint32_t g
     }
 }
 
+/**
+ * @brief Apply the AP address tuple and record IP_DHCP.
+ * @param ip IPv4 address in lwIP/network byte order.
+ * @param netmask IPv4 mask in lwIP/network byte order.
+ * @param gw IPv4 gateway in lwIP/network byte order.
+ * @note Takes the core lock; requires a configured interface. Does not start a DHCP client or the AP DHCP server.
+ * @return -1 for a missing AP interface, otherwise 0.
+ */
 int8_t network_stack_set_dynamic_ip_if_ap(uint32_t ip, uint32_t netmask, uint32_t gw)
 {
     ip4_addr_t ip_addr = { .addr = ip };
@@ -866,6 +1058,11 @@ int8_t network_stack_set_dynamic_ip_if_ap(uint32_t ip, uint32_t netmask, uint32_
 }
 
 
+/**
+ * @brief Start or stop the AP DHCP server under the core lock.
+ * @param enable Nonzero starts at the AP address; zero stops the server.
+ * @return -1 for a missing interface, otherwise 0 without checking server status.
+ */
 int8_t network_stack_set_dhcp_server_if_ap(int enable)
 {
     struct netif *pNetIf = network_get_ap_if();
@@ -891,6 +1088,18 @@ int8_t network_stack_set_dhcp_server_if_ap(int enable)
     return 0;
 }
 
+/**
+ * @brief Read the selected interface's IPv4 tuple and recorded DHCP mode.
+ * @param role WLAN_ROLE_STA or WLAN_ROLE_AP.
+ * @param[out] ip Optional address output in lwIP/network byte order.
+ * @param[out] netmask Optional mask output in lwIP/network byte order.
+ * @param[out] gw Optional gateway output in lwIP/network byte order.
+ * @param[out] dhcp Optional output: true for IP_DHCP, false for IP_STATIC;
+ *  left untouched for other stored mode values.
+ * @return 0 on lookup success, -1 for an unsupported role or missing interface.
+ * @note Does not acquire the core lock; outputs need not form an atomic snapshot.
+ *  Mode flags describe configuration, not current DHCP lease/server state.
+ */
 int8_t network_stack_get_if_ip(WlanRole_e role, uint32_t *ip, uint32_t *netmask, uint32_t *gw, uint32_t *dhcp)
 {
     struct netif *intf = NULL;
@@ -951,6 +1160,14 @@ int8_t network_stack_get_if_ip(WlanRole_e role, uint32_t *ip, uint32_t *netmask,
     return 0;
 }
 
+/**
+ * @brief Replace the single extra interface-address notification callback.
+ * @param callback Function receiving role and IPv4 address in lwIP byte order;
+ *  NULL disables notifications.
+ * @note Called synchronously from status_callback() in core context for up
+ *  interfaces, including zero addresses. Register during startup or serialize
+ *  updates; callbacks should avoid blocking the core thread.
+ */
 void network_stack_register_extra_status_callback(void (*callback)(WlanRole_e, uint32_t))
 {
     extra_status_callback = callback;

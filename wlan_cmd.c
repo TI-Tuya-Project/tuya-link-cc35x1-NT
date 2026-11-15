@@ -29,6 +29,14 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file wlan_cmd.c
+ * @brief WLAN terminal command handlers, usage output and vendor-IE storage.
+ * Bridges CLI parsers to TI WLAN configuration, role, P2P and CSI APIs. Several
+ * requests busy retry OPER_IN_PROGRESS or wait for application event signals;
+ * use task context with initialized app_CB and event delivery. Vendor IE lists,
+ * certificate buffers and command state are shared without a general module lock.
+ */
 /* Standard includes */
 #include "network_terminal.h"
 #include <stdlib.h>
@@ -371,18 +379,33 @@ int32_t printWlanRoleUpApUsage(void *arg)
 }
 
 #ifdef CC35XX
+/**
+ * @brief Print Create Vendo IEList command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printCreateVendoIEListUsage(void *arg)
 {
     printRoleIdGetUsage(arg);
     return(0);
 }
 
+/**
+ * @brief Print Delete Vendo IEList command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printDeleteVendoIEListUsage(void *arg)
 {
     printRoleIdGetUsage(arg);
     return(0);
 }
 
+/**
+ * @brief Print add Vendo IE command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printaddVendoIEUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -395,6 +418,11 @@ int32_t printaddVendoIEUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Print Delete Vendo IE command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printDeleteVendoIEUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -408,6 +436,11 @@ int32_t printDeleteVendoIEUsage(void *arg)
 
 
 
+/**
+ * @brief Print Confi Peer Aging command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printConfiPeerAgingUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -423,6 +456,11 @@ int32_t printConfiPeerAgingUsage(void *arg)
 }
 
 
+/**
+ * @brief Print Wlan Role Up P2 P command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printWlanRoleUpP2PUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -440,6 +478,11 @@ int32_t printWlanRoleUpP2PUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Print Wlan Role Down P2 P command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printWlanRoleDownP2PUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -453,6 +496,10 @@ int32_t printWlanRoleDownP2PUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Print Wlan P2 PFind command syntax and option descriptions.
+ * @param arg Unused command argument.
+ */
 int32_t printWlanP2PFindUsage(void *arg)
 {
 
@@ -460,6 +507,11 @@ int32_t printWlanP2PFindUsage(void *arg)
     return( ScanUsage(&scanType));
 }
 
+/**
+ * @brief Print Wlan2 PConnect command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printWlan2PConnectUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -479,6 +531,11 @@ int32_t printWlan2PConnectUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Print Wlan P2 PFind Stop command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printWlanP2PFindStopUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -492,6 +549,11 @@ int32_t printWlanP2PFindStopUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Print Wlan P2 PGrp Remove command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printWlanP2PGrpRemoveUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -505,6 +567,11 @@ int32_t printWlanP2PGrpRemoveUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Print Wlan P2 PSet Channel command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printWlanP2PSetChannelUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -519,6 +586,11 @@ int32_t printWlanP2PSetChannelUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Print Wlan P2 PGet Channel command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printWlanP2PGetChannelUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -532,6 +604,11 @@ int32_t printWlanP2PGetChannelUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Print Wlan P2 PListen command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printWlanP2PListenUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -545,6 +622,11 @@ int32_t printWlanP2PListenUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Print Wlan P2 PCancel command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printWlanP2PCancelUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -1399,6 +1481,11 @@ int32_t ScanUsage(void *arg)
 ////////////////////  Vendor IE utility function /////////////////////////////////
 /* Reads the AP vendor info IEs from the data structure of given role */
 /* Parses it into one buffer and sends the command to FW */
+/**
+ * @brief Pack a three-byte OUI into the low 24 bits of a uint32_t.
+ * @param oui Required readable three-byte OUI.
+ * @return oui[0] in the least-significant byte followed by oui[1] and oui[2].
+ */
 static uint32_t get_oui(const unsigned char* oui)
 {
     return oui[0] | (oui[1] << 8) | (oui[2] << 16);
@@ -1439,6 +1526,13 @@ const vendor_ie_t example_4_vendor_ie =
 };
 
 /* create empty list for vendor IE */
+/**
+ * @brief Allocate a self-linked vendor-list sentinel for a role.
+ * @param role Valid g_vendor_ie index.
+ * @return TRUE on allocation, FALSE on allocation failure.
+ * @note Existing-list detection only logs: creating again overwrites the old
+ *  pointer without releasing it. Pair successful creation with list deletion.
+ */
 int32_t create_vendor_ie_list(WlanRole_e role)
 {
     struct ie_vendor_node_t *ie_list_head;
@@ -1471,6 +1565,13 @@ int32_t create_vendor_ie_list(WlanRole_e role)
     return TRUE;
 }
 
+/**
+ * @brief Free vendor IE nodes reachable before the list sentinel.
+ * @param role Valid index into an initialized g_vendor_ie list.
+ * @return Always 0.
+ * @note Leaves the sentinel self-linked. Does not rewrite g_vendor_ie[role] or
+ *  send firmware updates; callers must preserve a valid head/sentinel relationship.
+ */
 int32_t clear_vendor_ie_list(WlanRole_e role)
 {
     struct ie_vendor_node_t *node;
@@ -1494,6 +1595,13 @@ int32_t clear_vendor_ie_list(WlanRole_e role)
     return ret;
 }
 
+/**
+ * @brief Release a role vendor-IE list and request empty firmware IE data.
+ * @param role Valid role index with an initialized list.
+ * @return WLAN set status, or 0 for an already empty list.
+ * @note Frees the saved head and clears its global pointer. Firmware calls busy
+ *  retry OPER_IN_PROGRESS; serialize list edits and firmware requests.
+ */
 int32_t delete_vendor_ie_list(WlanRole_e role)
 {
     int32_t ret = 0;
@@ -1525,6 +1633,14 @@ out:
     return ret;
 }
 
+/**
+ * @brief Copy or replace a vendor IE by OUI and submit the list to firmware.
+ * @param role Valid role index with an existing vendor list.
+ * @param ie Borrowed OUI/payload descriptor; payload length must be 1 through 252.
+ * @return -1 on validation/allocation failure, otherwise set_vendor_ie() status.
+ * @note Stored data is heap-owned by the list. Partial allocation failure does
+ *  not release every successful allocation; firmware failure does not roll back edits.
+ */
 int add_vendor_ie(WlanRole_e role, const vendor_ie_t *ie)
 {
     int32_t ret = 0;
@@ -1607,6 +1723,13 @@ out:
     return ret;
 }
 
+/**
+ * @brief Remove a matching vendor IE and submit the remaining list.
+ * @param role Valid role index with an initialized list.
+ * @param oui Required three-byte OUI; NULL returns -1.
+ * @return 0 if not present, -1 for NULL, otherwise firmware-update status.
+ * @note Frees the removed data/node before updating firmware; no rollback or lock.
+ */
 int delete_vendor_ie(WlanRole_e role,const unsigned char *oui)
 {
     int32_t ret = 0;
@@ -1659,6 +1782,13 @@ out:
 
 
 
+/**
+ * @brief Serialize a role vendor-IE list into a firmware command.
+ * @param role Valid index with a live vendor-list sentinel.
+ * @return -1 for allocation/template overflow, otherwise Wlan_Set() status.
+ * @note Frees the temporary command buffer. Busy retries OPER_IN_PROGRESS with
+ *  no delay or timeout; requires serialized task-context use.
+ */
 int set_vendor_ie(WlanRole_e role)
 {
     int32_t ret = 0;
@@ -1870,6 +2000,11 @@ int32_t cmdScanCallback(void *arg)
 }
 
 //this will consume more memory and will return more IEs per result
+/**
+ * @brief Set the firmware scan-result capacity.
+ * @param maxNumOfResult Maximum result count sent to WLAN_SET_SCAN_RESULTS_SIZE.
+ * @note Busy retries OPER_IN_PROGRESS; final driver errors are not returned.
+ */
 void setScanResultsConfig(uint8 maxNumOfResult)
 {
     uint16_t scanResultsSize = maxNumOfResult;
@@ -2133,6 +2268,11 @@ int32_t cmdSetInterfaceIpCallback(void *arg)
 }
 
 
+/**
+ * @brief Print Set Interface Ip command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printSetInterfaceIpUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -2720,6 +2860,11 @@ int32_t cmdSetPsModeCallback(void *arg)
     return (ret);
 }
 
+/**
+ * @brief Print Set Pm Mode command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printSetPmModeUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -2836,6 +2981,11 @@ int32_t cmdSetPmModeCallback(void *arg)
 }
 
 
+/**
+ * @brief Print Set Lsi command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printSetLsiUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -2875,6 +3025,12 @@ int32_t printSetChListUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Extract the -n channel-count option.
+ * @param arg Valid CLI argument string with a numeric value after -n.
+ * @return Count narrowed to uint8_t, or 0 when missing.
+ * @note Uses strtok()/atoi(); missing -n values are not NULL-checked.
+ */
 int32_t ParseSelectedChannelsLength(void* arg)
 {
     char cmdStr[CMD_BUFFER_LEN + 1];
@@ -2912,6 +3068,15 @@ int32_t ParseSelectedChannelsLength(void* arg)
      return 0;
 }
 
+/**
+ * @brief Allocate and populate the selected-channel list.
+ * @param arg Valid CLI arguments containing -n count and -l channel values.
+ * @param[out] selectedChannels Required output descriptor; owns channelArray on success.
+ * @return 0 on success, -1 for invalid/missing options or allocation failure.
+ * @note Caller must free successful channelArray with os_free(). Error after
+ *  allocation frees it but leaves the pointer unchanged. Values must be positive;
+ *  regulatory channel validity is not checked here. Uses shared strtok() state.
+ */
 int32_t ParseSetSelectedChannelsCmd(void *arg, WlanSelectedChannelsArray_t *selectedChannels)
 {
     char cmdStr[CMD_BUFFER_LEN + 1];
@@ -3055,6 +3220,12 @@ int32_t cmdSetSelectedScanChannelsCallback(void *arg)
 #endif //CC33XX
 
 #ifdef CC35XX
+/**
+ * @brief Parse/validate a primary firmware slot and send the setting.
+ * @param arg Valid CLI argument string.
+ * @return Parse/driver status; invalid slot can return a successful parse status
+ *  after printing usage. Accepted slot values are 1 and 2.
+ */
 int32_t cmdSetWsocPrimaryCallback(void *arg)
 {
     int16_t         ret = 0;
@@ -3073,6 +3244,11 @@ int32_t cmdSetWsocPrimaryCallback(void *arg)
     return (ret);
 }
 
+/**
+ * @brief Print Set Wsoc Primary command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printSetWsocPrimaryUsage(void *arg)
 {
     Report(lineBreak);
@@ -3161,6 +3337,11 @@ int32_t ParseSetLsiCmd(void *arg, WlanLongSleepInterval *LsiParams)
     return (0);
 }
 
+/**
+ * @brief Parse and apply the WLAN long-sleep interval.
+ * @param arg Valid CLI argument string accepted by ParseSetLsiCmd().
+ * @return Parse failure or Wlan_Set() status; logs the result.
+ */
 int32_t cmdSetLsiCallback(void *arg)
 {
     int16_t               ret = 0;
@@ -3320,6 +3501,14 @@ int32_t printWlanStartUsage(void *arg)
     \sa
  */
 extern void WlanStackEventHandler(WlanEvent_t *pWlanEvent);
+/**
+ * @brief Start WLAN event handling and configure power/TX pacing.
+ * @param arg Unused command argument.
+ * @return Final startup/configuration status; later Wlan_Set() calls can replace
+ *  the original start status.
+ * @note Registers WlanStackEventHandler, marks the stack up on start success and
+ *  optionally applies build-specific MAC setup. Does not itself connect to an AP.
+ */
 int32_t cmdWlanStartCallback(void *arg)
 {
 
@@ -3497,6 +3686,15 @@ int32_t cmdWlanStopCallback(void *arg)
  */
 
 //TODO add cmdSendEtherCallback to the  menu
+/**
+ * @brief Submit an Ethernet frame when WLAN and STA role are marked up.
+ * @param role WLAN role forwarded to the driver.
+ * @param inbuf Borrowed frame bytes.
+ * @param inbuf_len Frame byte count.
+ * @param flags Driver send flags.
+ * @return -1 if prerequisites fail, otherwise Wlan_EtherPacketSend() status.
+ * @note The STA-up guard is applied even when another role is supplied.
+ */
 int32_t cmdSendEtherCallback(WlanRole_e role, uint8_t *inbuf, uint32_t inbuf_len,uint32_t flags)
 {
 
@@ -3530,6 +3728,11 @@ int32_t cmdSendEtherCallback(WlanRole_e role, uint8_t *inbuf, uint32_t inbuf_len
     return ret;
 }
 
+/**
+ * @brief Placeholder test command; currently performs no active operation.
+ * @param arg Unused command argument.
+ * @return Always 0; experimental body is excluded by #if 0.
+ */
 int32_t cmdtestCallback(void *arg)
 {
 
@@ -3553,6 +3756,11 @@ int32_t cmdtestCallback(void *arg)
 }
 
 
+/**
+ * @brief Print test Stop command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printtestStopUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -3652,6 +3860,11 @@ void printFrameSubTyps(void)
 }
 
 /////************ csi *************////
+/**
+ * @brief Print CSI enable syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printCsiEnableUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -3665,6 +3878,11 @@ int32_t printCsiEnableUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Print Csi Solicitation command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printCsiSolicitationUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -3678,6 +3896,11 @@ int32_t printCsiSolicitationUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Print Csi Solicitation Set Mac command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printCsiSolicitationSetMacUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -3692,6 +3915,11 @@ int32_t printCsiSolicitationSetMacUsage(void *arg)
 }
 
 
+/**
+ * @brief Print Csi Stop command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printCsiStopUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -3705,6 +3933,11 @@ int32_t printCsiStopUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Print Csi Disable command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printCsiDisableUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -3718,6 +3951,11 @@ int32_t printCsiDisableUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Print Csi Get Results command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printCsiGetResultsUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -3918,6 +4156,12 @@ int32_t csiInitCallback(void *arg)
     return ret;
 }
 
+/**
+ * @brief Parse and apply CSI solicitation settings.
+ * @param arg Valid CLI options; defaults enable solicitation with period 100.
+ * @return -1 for parse failure, otherwise Wlan_Set() status.
+ * @note Does not wait for CSI traffic or validate delivery.
+ */
 int32_t csiSolicCallback(void *arg)
 {
     // Handle CSI solicitation
@@ -3948,6 +4192,11 @@ int32_t csiSolicCallback(void *arg)
 
 
 
+/**
+ * @brief Parse and apply a CSI solicitation MAC-list update.
+ * @param arg Valid CLI options for ParseCsiSolicSetMacCmd().
+ * @return -1 for parse failure, otherwise Wlan_Set() status.
+ */
 int32_t csiSolicSetMacCfg(void *arg)
 {
     // Handle CSI solicitation MAC list
@@ -4954,6 +5203,14 @@ int32_t cmdWlanP2PConnectCallback(void *arg)
  }
 
 
+/**
+ * @brief Request P2P scan cancellation and wait for its completion event.
+ * @param arg Unused command argument.
+ * @return Driver status, or -1 for synchronization-object creation/deletion failure.
+ * @note Busy retries OPER_IN_PROGRESS, then waits up to 100 OSI seconds; wait
+ *  status is ignored. Deletes the shared signal and clears the waiter flag.
+ *  Serialize calls; requires WLAN event delivery from another task.
+ */
 int32_t cmdWlanP2PFindStopCallback(void *arg)
 {
     WlanP2pCmd_t pParams;
@@ -4994,6 +5251,12 @@ int32_t cmdWlanP2PFindStopCallback(void *arg)
 }
 
 
+/**
+ * @brief Request removal of the current P2P group.
+ * @param arg Unused command argument.
+ * @return Wlan_Set() status after busy retrying OPER_IN_PROGRESS.
+ * @note Does not wait for the group-removed event.
+ */
 int32_t cmdWlanP2PGrpRemoveCallback(void *arg)
 {
     WlanP2pCmd_t pParams;
@@ -5004,6 +5267,12 @@ int32_t cmdWlanP2PGrpRemoveCallback(void *arg)
     return ret;
 }
 
+/**
+ * @brief Parse and set P2P channel/class and GO-intent configuration.
+ * @param arg Valid options for ParseSetChannelCmd().
+ * @return -1 for parse failure, otherwise Wlan_Set() status after busy retry.
+ * @note Initializes 2.4-GHz regulatory defaults before parsing.
+ */
 int32_t cmdWlanP2PSetChannelCallback(void *arg)
 {
     WlanP2pCmd_t P2PSetChannel;
@@ -5039,6 +5308,12 @@ int32_t cmdWlanP2PSetChannelCallback(void *arg)
     return ret;
 }
 
+/**
+ * @brief Query and print P2P channel/class and GO-intent settings.
+ * @param arg Unused command argument.
+ * @return Wlan_Get() status after busy retrying OPER_IN_PROGRESS.
+ * @note Prints the result structure even if the final query failed.
+ */
 int32_t cmdWlanP2PGetChannelCallback(void *arg)
 {
     int32_t ret;
@@ -5055,6 +5330,11 @@ int32_t cmdWlanP2PGetChannelCallback(void *arg)
     return ret;
 }
 
+/**
+ * @brief Request P2P listen mode.
+ * @param arg Unused command argument.
+ * @return Wlan_Set() status after busy retrying OPER_IN_PROGRESS.
+ */
 int32_t cmdWlanP2PListenCallback(void *arg)
 {
     int32_t ret;
@@ -5068,6 +5348,11 @@ int32_t cmdWlanP2PListenCallback(void *arg)
     return ret;
 }
 
+/**
+ * @brief Request cancellation of the active P2P operation.
+ * @param arg Unused command argument.
+ * @return Wlan_Set() status after busy retrying OPER_IN_PROGRESS.
+ */
 int32_t cmdWlanP2PCancelCallback(void *arg)
 {
     int32_t ret;
@@ -5156,6 +5441,12 @@ int32_t printWlanSetConnPolicyUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Query and print auto/fast/persistent connection-policy flags.
+ * @param arg Unused command argument.
+ * @return -1 when WLAN is stopped, otherwise 0 even on driver-query failure.
+ * @note Busy retries OPER_IN_PROGRESS and prints the resulting structure.
+ */
 int32_t cmdWlanGetConnPolicyCallback(void *arg)
 {
     int32_t ret = 0;
@@ -5929,6 +6220,12 @@ int32_t printWlanGetRegDomainEntryUsage(void *arg)
 #endif // CC35XX
 
 #ifdef SNTP_SUPPORT
+/**
+ * @brief Parse, store and release up to three configured SNTP server strings.
+ * @param arg Valid CLI options for ParseSntpConfigServersCmd().
+ * @return Parser status on success; parse failure prints usage and returns 0.
+ * @note Copies addresses into the wrapper before freeing parsed string storage.
+ */
 int32_t cmdSntpConfigServers(void *arg)
 {
     int32_t ret  = 0;
@@ -5949,6 +6246,12 @@ int32_t cmdSntpConfigServers(void *arg)
     return ret;
 }
 
+/**
+ * @brief Request an SNTP update when STA is connected or AP role exists.
+ * @param arg Unused command argument.
+ * @return -1 for unavailable networking, otherwise wrapper result.
+ * @note Blocks in task context; wrapper success does not rule out time-sync timeout.
+ */
 int32_t cmdSntpUpdateDateTime(void *arg)
 {
     int32_t ret  = 0;
@@ -5965,6 +6268,13 @@ int32_t cmdSntpUpdateDateTime(void *arg)
 }
 #endif //SNTP_SUPPORT
 
+/**
+ * @brief Parse calendar fields and set the OSI wall clock.
+ * @param arg Valid date/time CLI options.
+ * @return 0 on both successful setting and usage after parse failure.
+ * @note Uses datetime_to_epoch(); parser/conversion limitations apply and clock
+ *  setter status is not exposed.
+ */
 int32_t cmdSetDateTime(void *arg)
 {
     int32_t ret  = 0;
@@ -5982,6 +6292,11 @@ int32_t cmdSetDateTime(void *arg)
     return ret;
 }
 
+/**
+ * @brief Print the runtime UTC clock.
+ * @param arg Unused command argument.
+ * @return Always 0; display errors are not propagated.
+ */
 int32_t cmdGetDateTime(void *arg)
 {
     int32_t ret  = 0;
@@ -5990,6 +6305,12 @@ int32_t cmdGetDateTime(void *arg)
 }
 
 #ifdef CC35XX_INDIGO_APP
+/**
+ * @brief Free selected global certificate/key storage and reset its metadata.
+ * @param type Client, server, key, or CLEAR_ALL_CERTIFICATES selector.
+ * @note Unknown selectors do nothing. Call only after consumers stop using the
+ *  selected buffers; pointers become invalid and no synchronization is provided.
+ */
 void releaseLoadedCertificate(certificate_load_type_t type)
 {
     switch(type)
@@ -6036,6 +6357,13 @@ void releaseLoadedCertificate(certificate_load_type_t type)
     }
 }
 
+/**
+ * @brief Dispatch certificate loading through its parser/UART receiver.
+ * @param arg Valid type/size CLI options followed by the expected raw UART bytes.
+ * @return -1 on negative parser result (clearing all loaded certificates),
+ *  otherwise 0, including the parser help result of 1.
+ * @note Requires exclusive task-context access to certificate state and UART input.
+ */
 int32_t cmdloadCertificateCallback(void *arg){
     int32_t ret = 0;
     LoadCertiCmd_t LoadCertiParams;

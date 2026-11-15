@@ -29,6 +29,12 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file ble_cmd.c
+ * @brief BLE terminal command handlers and usage output.
+ * Parses console options and forwards requests to the NimBLE host adapter.
+ * Run commands in task context with the host initialized for BLE operations.
+ */
 /* Standard includes */
 #include "network_terminal.h"
 #include <stdlib.h>
@@ -614,6 +620,11 @@ int32_t printBleConnUpdateUsage(void *arg)
     return(0);
 }
 
+/**
+ * @brief Parse a BLE PHY update and forward it to the host.
+ * @param arg Valid CLI arguments accepted by ParseBleSetPhyCmd().
+ * @return -1 for parse failure, otherwise nimble_host_set_phy() status.
+ */
 int32_t cmdBleSetPhyCallback(void *arg)
 {
     int ret = 0;
@@ -632,6 +643,11 @@ int32_t cmdBleSetPhyCallback(void *arg)
                                params.phy_opts);
 }
 
+/**
+ * @brief Print Ble Set Phy command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printBleSetPhyUsage(void *arg)
 {
     UART_PRINT(lineBreak);

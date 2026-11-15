@@ -29,6 +29,15 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file lwip_ping.c
+ * @brief CC35XX IPv4 ping sessions using raw lwIP PCBs and FreeRTOS workers.
+ * Owns two static sessions. Start queues initialization to the TCP/IP thread;
+ * a worker queues periodic sends and teardown there. Serialize public lifecycle
+ * requests: flags and slot allocation have no lock. Do not reuse a stopped slot
+ * before asynchronous cleanup finishes.
+ */
+
 
 #ifdef CC35XX
 
@@ -102,6 +111,10 @@ int8_t is_ip_addr_in_net_list(const ip_addr_t *addr);
 
 
 
+/**
+ * @brief Allocate a sequential echo identifier in serialized core context.
+ * @return Next identifier starting at 0x1000, wrapping before returning 0xffff.
+ */
 static uint16_t ping_assign_cmp_id(void)
 {
     if (ping_next_id == 0xFFFF)
@@ -112,6 +125,13 @@ static uint16_t ping_assign_cmp_id(void)
 }
 
 
+/**
+ * @brief Build an ICMP echo header, byte-pattern payload and checksum.
+ * @param[out] ping_msg Contiguous writable header plus configured payload space.
+ * @param ping_session Valid session supplying ID, sequence and payload size.
+ * @note Fills payload with repeating 0-255 bytes. Stores ID/sequence in network
+ *  order; does not advance counters or transmit.
+ */
 static void ping_prepare(ping_msg_t *ping_msg, lwip_ping_session_t *ping_session)
 {
     uint16_t i = 0;
@@ -133,6 +153,14 @@ static void ping_prepare(ping_msg_t *ping_msg, lwip_ping_session_t *ping_session
 }
 
 /* session specific init routine */
+/**
+ * @brief Create/bind a raw PCB and launch the session sender worker.
+ * @param param Live session pointer retained for asynchronous work.
+ * @note TCP/IP-thread callback. Converts source/target IPv4 values to network
+ *  order. A nonzero source must match a local interface. On PCB/bind/task failure,
+ *  logs, clears is_running and releases any created PCB; no completion result
+ *  is returned to the original start caller.
+ */
 static void lwip_ping_init(void *param)
 {
     err_t err;
@@ -188,6 +216,17 @@ static void lwip_ping_init(void *param)
     }
 }
 
+/**
+ * @brief Consume echo replies whose identifier matches the session.
+ * @param arg Valid session callback argument.
+ * @param pcb Unused raw PCB.
+ * @param p Borrowed IPv4 pbuf; freed only when returning 1.
+ * @param addr Valid source address for optional logging.
+ * @return 1 after counting/freeing a matching reply; 0 leaves ownership to lwIP.
+ * @note Core callback. Does not verify source or sequence. Assumes contiguous
+ *  headers in the first payload; reads IP header length before checking total
+ *  size, so this is not comprehensive packet validation.
+ */
 uint8_t ping_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p, const ip_addr_t *addr)
 {
     lwip_ping_session_t *ping_session = (lwip_ping_session_t *)arg;
@@ -224,6 +263,13 @@ uint8_t ping_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p, const ip_addr_
 }
 
 /* Sent from LWIP thread */
+/**
+ * @brief Allocate and send one echo request in TCP/IP context.
+ * @param ctx Valid session with a bound raw PCB.
+ * @note Frees allocated pbuf storage on all paths. Only successful raw_sendto()
+ *  increments sent count/sequence. Skips noncontiguous pbufs; allocation/send
+ *  failure is silent.
+ */
 void lwip_ping_send(void *ctx)
 {
     struct pbuf *p = NULL;
@@ -263,6 +309,11 @@ void lwip_ping_send(void *ctx)
     pbuf_free(p);
 }
 
+/**
+ * @brief Queue a send request for the TCP/IP thread.
+ * @param ping_session Session that remains live until callback completion.
+ * @note Logs queue failure; does not wait for transmission.
+ */
 static void ping_send(lwip_ping_session_t *ping_session)
 {
     err_t err;
@@ -274,6 +325,13 @@ static void ping_send(lwip_ping_session_t *ping_session)
     }
 }
 
+/**
+ * @brief Request periodic sends until stopped or the success count is reached.
+ * @param arg Live session supplied at task creation.
+ * @note Count zero runs indefinitely. Sleeps interval_time_ms between requests;
+ *  sent counters update asynchronously. Queues cleanup and deletes itself
+ *  without waiting for PCB removal; cleanup queue errors are ignored.
+ */
 void ping_session_task(void *arg)
 {
     lwip_ping_session_t *session = (lwip_ping_session_t *)arg;
@@ -310,6 +368,14 @@ void ping_session_task(void *arg)
     vTaskDelete(NULL);
 }
 
+/**
+ * @brief Reserve a static session and queue initialization.
+ * @param ping_params Valid configuration copied into session storage.
+ * @return One-based ID (1 or 2), or -1 when no free slot exists.
+ * @note Parameters and queue success are not checked. Sleeps 50 microseconds;
+ *  this is not an initialization barrier, so success does not confirm PCB/task
+ *  creation. Serialize allocation and avoid reuse before cleanup.
+ */
 int32_t lwip_ping_start(PingParams_t *ping_params)
 {
     int i;
@@ -349,6 +415,13 @@ int32_t lwip_ping_start(PingParams_t *ping_params)
     }
 }
 
+/**
+ * @brief Remove the raw PCB and optionally report final counters.
+ * @param args Live session with a valid PCB; runs in TCP/IP context.
+ * @note Optional ping_deinit_callback receives stack-local results: copy them
+ *  during the call, never retain the pointer. Does not free static storage or
+ *  reset the PCB pointer; invoke once per teardown.
+ */
 void lwip_ping_deinit(void *args)
 {
     lwip_ping_session_t *ping_session = (lwip_ping_session_t *)args;
@@ -380,6 +453,13 @@ void lwip_ping_deinit(void *args)
     }
 }
 
+/**
+ * @brief Request a session stop or list active sessions.
+ * @param session_id Zero lists; only 1 and 2 are valid stop IDs.
+ * @return 0 for listing or clearing a running flag; -1 for rejected/inactive IDs.
+ * @note Does not wait for worker/PCB cleanup. Existing validation also accepts 3
+ *  and can index past the table; callers must not supply it.
+ */
 int32_t lwip_ping_stop(int8_t session_id)
 {
     /* Validate session number

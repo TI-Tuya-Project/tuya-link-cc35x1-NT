@@ -116,13 +116,25 @@ static volatile int s_alarm_on = 0; /* set from inbound property/set */
 /* ----- Helpers ----- */
 
 /* Read a button's logical (pressed) state: 1 = pressed, 0 = released. */
+/**
+ * @brief Convert a GPIO level into a logical button state.
+ * @param b Valid mapping containing GPIO index and active-low polarity.
+ * @return 1 when pressed, otherwise 0.
+ */
 static int button_read(const button_map_t *b)
 {
     int level = GPIO_read(b->gpio);
     return b->active_low ? (level == 0) : (level != 0);
 }
 
-/* Push a debounced state change onto a button's ring (poll task is sole producer). */
+/* Push a press event onto a button's ring (poll task is sole producer). */
+/**
+ * @brief Append an event to a button's single-producer ring if space remains.
+ * @param b Valid button mapping; called only by its polling producer.
+ * @param state Event byte; current callers enqueue 1 for a press.
+ * @note Silently drops events when all BTN_Q_LEN slots are occupied. Publishes
+ *  head after storing the byte. Only drain_buttons() should advance tail.
+ */
 static void button_enqueue(button_map_t *b, int state)
 {
     if ((uint8_t)(b->head - b->tail) < BTN_Q_LEN) {
@@ -132,8 +144,16 @@ static void button_enqueue(button_map_t *b, int state)
 }
 
 /* Dedicated task: sample every BTN_POLL_MS, accept a new state only after it has
- * held for BTN_STABLE_POLLS samples (debounce), then enqueue the change. Runs
+ * held for BTN_STABLE_POLLS samples (debounce), then enqueue press edges. Runs
  * independently of the MQTT recv block so fast presses are not missed. */
+/**
+ * @brief Poll pull-up inputs and queue debounced press edges indefinitely.
+ * @param arg Unused FreeRTOS task argument.
+ * @note Initializes rings and adopts the initial physical state without an
+ *  event. Samples every BTN_POLL_MS; accepts a change after BTN_STABLE_POLLS
+ *  equal samples. Release edges update debounce state but are not queued.
+ *  Requires initialized GPIO and must have only one instance.
+ */
 static void button_poll_task(void *arg)
 {
     (void)arg;
@@ -171,6 +191,12 @@ static void button_poll_task(void *arg)
 }
 
 /* Start the button sampling task. GPIO is already initialized by Board_init(). */
+/**
+ * @brief Create the dedicated button-polling task.
+ * @note Requires Board_init(). Uses BUTTON_TASK_STACK_WORDS at application
+ *  priority; creation failure is ignored. No handle or duplicate-start guard
+ *  is retained.
+ */
 static void buttons_start(void)
 {
     xTaskCreate(button_poll_task, "tuya_btn", BUTTON_TASK_STACK_WORDS, NULL,
@@ -180,8 +206,19 @@ static void buttons_start(void)
 /* Dedicated task: while s_alarm_on, flash the two external siren LEDs in
  * antiphase (red on/blue off <-> blue on/red off) every SIREN_PERIOD_MS and
  * pulse the active buzzer in step with the flash. When off, both LEDs and the
- * buzzer are held low. The pins are configured as outputs (initial low) by
+ * buzzer are cleared only when phase is nonzero (see function note). The pins
+ * are configured as outputs (initial low) by
  * Board_init() from SysConfig. */
+
+/**
+ * @brief Drive siren LEDs and buzzer from the shared alarm flag indefinitely.
+ * @param arg Unused FreeRTOS task argument.
+ * @note Requires SysConfig output pins initialized by Board_init(). Alternates
+ *  red/blue every SIREN_PERIOD_MS and drives the buzzer with the red phase.
+ *  When disabled, polls at 50 ms and clears outputs only if phase is nonzero;
+ *  disabling during phase zero can therefore leave the blue LED high. Does
+ *  not publish state or monitor MQTT connectivity.
+ */
 static void siren_task(void *arg)
 {
     (void)arg;
@@ -210,6 +247,11 @@ static void siren_task(void *arg)
     }
 }
 
+/**
+ * @brief Create the siren-output task at the application priority.
+ * @note Uses SIREN_TASK_STACK_WORDS. Creation failure is ignored; no task handle
+ *  or duplicate-start guard is retained.
+ */
 static void siren_start(void)
 {
     xTaskCreate(siren_task, "tuya_siren", SIREN_TASK_STACK_WORDS, NULL,
@@ -219,6 +261,17 @@ static void siren_start(void)
 /* Parse a flat boolean DP out of an inbound property/set payload, e.g.
  * {"led_red":true} or {"led_red":1}. Returns 1 if `code` was found and writes
  * the value to *on; returns 0 if absent. */
+/**
+ * @brief Extract a boolean-like value using a quoted-key substring search.
+ * @param json Valid NUL-terminated payload.
+ * @param code Valid DP code; its quoted form must fit the 64-byte search buffer.
+ * @param[out] on Receives 1 for true or an integer >= 1, otherwise 0.
+ * @return 1 if a matching key and subsequent colon are found; 0 otherwise,
+ *  leaving on untouched. Success does not mean the JSON/value is valid.
+ * @note Skips spaces/tabs, accepts true/false prefixes, and otherwise uses atoi()
+ *  (unrecognized text becomes false). Does not validate JSON structure, scope,
+ *  escapes or value boundaries; use only with the expected flat DP payloads.
+ */
 static int parse_bool_dp(const char *json, const char *code, int *on)
 {
     char needle[64];
@@ -246,6 +299,16 @@ static int parse_bool_dp(const char *json, const char *code, int *on)
 }
 
 /* Report one boolean DP up to the cloud: {"<code>":{"value":<bool>}}. */
+/**
+ * @brief Submit one boolean DP in Tuya property-report format.
+ * @param context Valid initialized MQTT context used by the application task.
+ * @param code Valid DP code matching the product; must fit the 96-byte payload
+ *  with JSON framing and require no JSON escaping.
+ * @param on Nonzero reports true; zero reports false.
+ * @note Formats {"code":{"value":true/false}} on the stack. Truncation and
+ *  the reporting API result are not checked; no delivery acknowledgement is
+ *  tracked by this helper.
+ */
 static void report_bool_dp(tuya_mqtt_context_t *context, const char *code, int on)
 {
     char payload[96];
@@ -255,6 +318,16 @@ static void report_bool_dp(tuya_mqtt_context_t *context, const char *code, int o
 }
 
 /* ----- Cloud -> board: apply an inbound property/set payload ----- */
+/**
+ * @brief Apply recognized cloud property writes to local outputs and state.
+ * @param context MQTT context for LED/alarm state reports.
+ * @param json NUL-terminated property payload; NULL is ignored.
+ * @note Applies every recognized LED DP using configured on/off polarity and
+ *  echoes it. Button DPs update the latched toggle baseline without an echo.
+ *  Alarm writes update s_alarm_on for the siren task and are echoed. Unknown
+ *  DPs are ignored. Uses parse_bool_dp() and inherits its parsing limitations.
+ *  Called by the MQTT task; does not change physical input GPIOs.
+ */
 static void handle_property_set(tuya_mqtt_context_t *context, const char *json)
 {
     if (json == NULL) {
@@ -290,6 +363,12 @@ static void handle_property_set(tuya_mqtt_context_t *context, const char *json)
 }
 
 /* ----- board -> cloud: drain queued button edges and report them ----- */
+/**
+ * @brief Consume queued presses, toggling and reporting each button's latch.
+ * @param context Valid MQTT context owned by the consuming application task.
+ * @note Sole ring consumer. Advances tail once per event; event byte contents
+ *  are unused. A report failure does not restore the event or toggle state.
+ */
 static void drain_buttons(tuya_mqtt_context_t *context)
 {
     for (size_t i = 0; i < BUTTON_COUNT; ++i) {
@@ -305,6 +384,13 @@ static void drain_buttons(tuya_mqtt_context_t *context)
     }
 }
 
+/**
+ * @brief Request the data model and report all local DP states on connection.
+ * @param context Connected MQTT context supplied by the SDK.
+ * @param user_data Unused callback data.
+ * @note Reads LED GPIO levels, reports button latches rather than physical
+ *  press levels, and reports the alarm flag. SDK/report results are ignored.
+ */
 static void on_connected(tuya_mqtt_context_t *context, void *user_data)
 {
     (void)user_data;
@@ -324,6 +410,13 @@ static void on_connected(tuya_mqtt_context_t *context, void *user_data)
     report_bool_dp(context, SIREN_DP_CODE, s_alarm_on);
 }
 
+/**
+ * @brief Log MQTT disconnection without changing local hardware state.
+ * @param context Unused MQTT context supplied by the SDK.
+ * @param user_data Unused callback data.
+ * @note Does not reconnect, stop helper tasks, clear button events or disable
+ *  the siren. Any SDK recovery policy is outside this callback.
+ */
 static void on_disconnect(tuya_mqtt_context_t *context, void *user_data)
 {
     (void)context;
@@ -331,6 +424,15 @@ static void on_disconnect(tuya_mqtt_context_t *context, void *user_data)
     TY_LOGI("Tuya MQTT disconnected");
 }
 
+/**
+ * @brief Dispatch MQTT property writes and log data-model responses.
+ * @param context MQTT context supplied by the SDK.
+ * @param user_data Unused callback data.
+ * @param msg Valid borrowed message; referenced strings must be valid for
+ *  logging and parsing during this callback.
+ * @note Other message types are ignored after logging their metadata. Does
+ *  not retain the message or its payload.
+ */
 static void on_messages(tuya_mqtt_context_t *context, void *user_data,
                         const tuyalink_message_t *msg)
 {
@@ -350,6 +452,17 @@ static void on_messages(tuya_mqtt_context_t *context, void *user_data,
     }
 }
 
+/**
+ * @brief Synchronize time, initialize/connect MQTT and service it indefinitely.
+ * @param arg Unused FreeRTOS task argument.
+ * @note Requires Wi-Fi STA/IP and Board_init() before startup. Attempts SNTP
+ *  with argument 5 if time is invalid; deletes itself if time remains invalid
+ *  or MQTT initialization fails. Retries initial connect every five seconds.
+ *  After connection, starts button/siren tasks, then alternates MQTT servicing
+ *  and draining button rings. Loop results are ignored; this function adds no
+ *  explicit reconnect logic after the initial connect and no shutdown path.
+ *  Uses shared s_client; only one application instance is supported.
+ */
 static void tuya_app_task(void *arg)
 {
     (void)arg;
@@ -402,6 +515,15 @@ static void tuya_app_task(void *arg)
     }
 }
 
+/**
+ * @brief Schedule the application bring-up task without waiting for connection.
+ * @return 0 if xTaskCreate succeeds, otherwise -1; success does not indicate
+ *  valid time, MQTT initialization or a cloud connection.
+ * @note Call once from task context after Wi-Fi STA/IPv4 and board setup.
+ *  Uses TUYA_APP_TASK_STACK_WORDS (FreeRTOS stack units) and application priority.
+ *  No duplicate-start guard or task handle is retained; repeated calls would
+ *  share the same MQTT context and GPIO/ring state.
+ */
 int tuya_app_start(void)
 {
     BaseType_t ok = xTaskCreate(tuya_app_task, "tuya_app",

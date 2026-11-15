@@ -29,6 +29,26 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file osi_filesystem.c
+ * @brief CC35X1 named-resource adapter for connectivity firmware and NV records.
+ *
+ * Exposes selected flash regions through XMEM and BLE/WLAN persistent records
+ * through NVOCMP behind opaque FILE pointers. Firmware/configuration reads use
+ * explicit byte offsets; NV reads always start at the beginning of the record.
+ * These entry points use adapter-specific semantics rather than standard stdio
+ * item counts or a maintained file position. Linker symbol mappings may redirect
+ * file operations here; do not combine them with a competing stdio adapter.
+ *
+ * NV initialization is lazy. Firmware selection, handles and payload offsets are
+ * shared globals with no locking in this module; callers must serialize access
+ * and initialization as needed. Closing a BLE record also deletes its NV item.
+ */
+/*******************************************************************************
+
+    Included Header Files
+
+********************************************************************************/
 #include <osi_kernel.h>
 
 #include "ti/common/nv/nvintf.h"
@@ -36,14 +56,6 @@
 #include "ti_flash_map_config.h"
 
 
-/*!
-    \brief the below functions are needed for file management of the upper mac.
-           currently only supported file is the WiFi part firmware bin file.
-           in the sitara AM243x launchpad, the firmware bin is saved in a specific flash offset.
-
-           those functions are redirected from fxxx to osi_fxxx in the linker command (--symbol_map=fread=osi_fread).
-           if already have system that use fopen fclose fread etc. this file should not be compiled in.
-*/
 #define ATTRIBUTE __attribute__ ((used))
 #define NVID_BLE_OUR_SEC_OFFSET_IN_FLASH (0x1)
 #define NVID_BLE_PEER_SEC_OFFSET_IN_FLASH (0x2)
@@ -427,7 +439,13 @@ int32_t getConfContent(XMEM_Handle flashHandle)
     return ret;
 }
 
-
+/**
+ * @brief Select the connectivity firmware slot used by subsequent fw opens.
+ * @param containerType OSI_FILESYSTEM_SET_CONNECTIVITY_FW_CONTAINER to select.
+ * @param params Pointer to a valid osiFlashFwSlot_e for that operation.
+ * @return Always 0; unsupported operations and slot values leave selection intact.
+ * @note Updates shared Fwslot; existing open descriptors are not changed.
+ */
 int ATTRIBUTE osi_fset(osiFileSetType containerType, void *params)
 {
     if(containerType == OSI_FILESYSTEM_SET_CONNECTIVITY_FW_CONTAINER)
@@ -445,7 +463,12 @@ int ATTRIBUTE osi_fset(osiFileSetType containerType, void *params)
 
     return 0;
 }
-
+/**
+ * @brief Query the selected connectivity firmware slot.
+ * @param containerType OSI_FILESYSTEM_GET_CONNECTIVITY_FW_CONTAINER to query.
+ * @param[out] params Valid osiFlashFwSlot_e pointer for that operation.
+ * @return Always 0; unsupported operations leave the output untouched.
+ */
 int ATTRIBUTE osi_fget(osiFileGetType containerType, void *params)
 {
     if(containerType == OSI_FILESYSTEM_GET_CONNECTIVITY_FW_CONTAINER)
@@ -456,7 +479,14 @@ int ATTRIBUTE osi_fget(osiFileGetType containerType, void *params)
 
     return 0;
 }
-
+/**
+ * @brief Release an adapter descriptor and its backing-resource metadata.
+ * @param _fp Descriptor from osi_fopen(), or NULL for a no-op.
+ * @return Always 0; backing-store close/delete errors are not propagated.
+ * @note Closes XMEM for firmware/configuration. BLE security and CCCD records
+ * are deleted from NV on close; WLAN records remain persistent. Frees descriptor
+ * storage, so a non-NULL handle must not be reused after this call.
+ */
 int ATTRIBUTE osi_fclose(FILE *_fp)
 {
     osiFileP_t *osiFile;
@@ -491,7 +521,19 @@ int ATTRIBUTE osi_fclose(FILE *_fp)
     os_free(_fp);
     return 0;
 }
-
+/**
+ * @brief Open a named adapter resource and lazily initialize NVOCMP.
+ * @param _fname Non-NULL, NUL-terminated resource name: fw, cc35xx-conf,
+ * rambtlr, our_sec, peer_sec, cccd, conn_p, profiles, or .fast.
+ * @param _mode Ignored; no access-mode validation is performed.
+ * @return Owned opaque descriptor to release with osi_fclose(), or NULL for an
+ * unknown name or a detected configuration-resource allocation/open/TLV error.
+ * @note fw uses the selected slot; cc35xx-conf locates its payload in vendor
+ * image slot 1. NV names map to BLE/WLAN item IDs without creating records.
+ * rambtlr initially has a NULL data pointer; its backing address must be valid
+ * before reading. NV initialization failure asserts. Most allocation branches
+ * and the firmware XMEM open do not validate failure before returning/using data.
+ */
 FILE * ATTRIBUTE osi_fopen(const char *_fname, const char *_mode)
 {
     osiFileP_t      *osiFile = NULL;
@@ -640,7 +682,17 @@ FILE * ATTRIBUTE osi_fopen(const char *_fname, const char *_mode)
 
     return (FILE *)(NULL);
 }
-
+/**
+ * @brief Read bytes from an adapter resource without advancing a file position.
+ * @param[out] _ptr Valid destination buffer with capacity for len bytes.
+ * @param len Number of bytes requested, not an stdio element size.
+ * @param offset Byte offset relative to the RAM or firmware/configuration payload;
+ * ignored for NV records, which are read from record offset zero.
+ * @param _fp Live descriptor from osi_fopen(); NULL returns zero.
+ * @return len on success, or 0 on a detected read failure/unsupported resource.
+ * @note RAM reads use memcpy and require a valid backing address and range;
+ * this adapter does not check payload bounds before accessing the backend.
+ */
 size_t ATTRIBUTE osi_fread(void *_ptr, size_t len, size_t offset, FILE *_fp)
 {
     osiFileP_t *osiFile;
@@ -695,7 +747,16 @@ size_t ATTRIBUTE osi_fread(void *_ptr, size_t len, size_t offset, FILE *_fp)
 
     return 0;
 }
-
+/**
+ * @brief Replace a BLE/WLAN NV record with the supplied bytes.
+ * @param _ptr Valid source buffer containing at least _size bytes.
+ * @param _size Byte count written, not an stdio element size.
+ * @param _count Ignored; it does not multiply _size.
+ * @param _fp Live NV descriptor; NULL and non-NV resources return zero.
+ * @return _size if writeItem succeeds, otherwise 0.
+ * @note Deletes the existing item before writing and ignores the delete result.
+ * Replacement is not atomic here; a failed write can leave the record absent.
+ */
 size_t osi_fwrite(const void *_ptr, size_t _size, size_t _count, FILE *_fp)
 {
     osiFileP_t *osiFile;
@@ -721,7 +782,13 @@ size_t osi_fwrite(const void *_ptr, size_t _size, size_t _count, FILE *_fp)
 
     return 0;
 }
-
+/**
+ * @brief Delete the NV item associated with a .fast descriptor.
+ * @param _fp Live descriptor from osi_fopen().
+ * @return 0 for successful deletion or any other non-NULL resource type;
+ * -1 for NULL or a failed fast-connect item deletion.
+ * @note Keeps the descriptor allocated; call osi_fclose() to release it.
+ */
 int osi_fremove(FILE *_fp)
 {
     osiFileP_t *osiFile;
@@ -748,23 +815,11 @@ int osi_fremove(FILE *_fp)
 
 }
 
-/*!
-    \brief initialize the SPI module
-    \param data - input buffer
-    \param length - length in bytes to read
-    \return 0 - success, -1 - failed
-    \note
-    1. if initializing all the MCU drivers at the beginning of the world, this function can stay empty.
-       this function is called in the wlan_start and will stay initialized even if used wlan_stop
-    2. the SPI must have the following parameters
-       - master
-       - 4 pin mode SPI
-       - chip select active low
-       - polarity 0 phase 0
-       - max frequency 40000000Hz
-       - data block 32bits
-    \warning
-*/
+/**
+ * @brief Placeholder for resource-length queries; no lookup is implemented.
+ * @param FileName Ignored resource name.
+ * @return Always 0; this does not establish that a resource exists or is empty.
+ */
 size_t ATTRIBUTE osi_filelength(const char * FileName)
 {
     return 0;

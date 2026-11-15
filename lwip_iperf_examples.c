@@ -29,6 +29,15 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file lwip_iperf_examples.c
+ * @brief CC35XX iperf CLI dispatch and shared TCP lifecycle helpers.
+ * Owns the static session table and stable test payload; dispatches to TCP/UDP
+ * backends. Raw TCP actions require core context. Stop/report callbacks complete
+ * shutdown asynchronously. Session allocation is not locked; callers must manage
+ * indices and keep callback arguments live.
+ */
+
 #include "lwip_iperf_examples.h"
 #include "lwip/opt.h"
 #include "lwip/sockets.h"
@@ -71,6 +80,13 @@ uint8_t send_buffer_initialized = 0;
 void iperflwip_tcp_stop_from_cb(void *arg);
 
 
+/**
+ * @brief Parse and dispatch an iperf command to its requested backend.
+ * @param arg Valid argument string accepted by ParseTestIperfCmd().
+ * @return -1 on parse failure, otherwise 0; backend startup status is discarded.
+ * @note Initializes shared send_buffer once. Parsed options are stack-local;
+ *  backends must copy them before returning.
+ */
 int32_t cmdTestIperfCallback(void *arg)
 {
     int32_t ret = 0;
@@ -125,6 +141,11 @@ int32_t cmdTestIperfCallback(void *arg)
  }
 
 
+/**
+ * @brief Parse a stop command and forward its process number.
+ * @param arg Valid argument string accepted by ParseStopTestIperfCmd().
+ * @return -1 on parse failure, otherwise iperflwip_stop() result.
+ */
 int32_t cmdStopTestIperfCallback(void *arg)
 {
     stopCmd_t stopCmd;
@@ -144,6 +165,14 @@ int32_t cmdStopTestIperfCallback(void *arg)
 
 }
 
+/**
+ * @brief Request shutdown of a running session or list active entries.
+ * @param args Valid uint32_t process-number pointer; value must index the table.
+ * @return 0 after requesting a running session stop; otherwise -1 after listing.
+ * @note Queues TCP stop to lwIP or calls the UDP backend helper. The subsequent
+ *  50-microsecond sleep does not confirm completion. No index validation here.
+ *  Listing starts at 1 and excludes the upper bound.
+ */
 int32_t iperflwip_stop(void* args)
 {
     int process_num = *((uint32_t *)args);
@@ -211,6 +240,11 @@ int32_t iperflwip_stop(void* args)
 
 
  */
+/**
+ * @brief Print iperf syntax, description and option details.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printTestIperfUsage(void *arg)
 {
     Report(lineBreak);
@@ -235,6 +269,11 @@ int32_t printTestIperfUsage(void *arg)
 
 
 
+/**
+ * @brief Print stop syntax and the process-number option.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printStopTestIperfUsage(void *arg)
 {
     Report(lineBreak);
@@ -251,6 +290,14 @@ int32_t printStopTestIperfUsage(void *arg)
 
 
 
+/**
+ * @brief Count idle polls and retry client queue filling.
+ * @param arg Valid session callback argument.
+ * @param tpcb Unused polling PCB.
+ * @return Always ERR_OK; transmission results are ignored.
+ * @note Core context. Requests stop at IPERF_LWIP_TCP_MAX_IDLE_SEC polls; actual
+ *  elapsed time depends on the registered poll interval, despite the name.
+ */
 err_t lwiperf_tcp_poll(void *arg, struct tcp_pcb *tpcb)
 {
     session_conn_t *session_con = (session_conn_t *)arg;
@@ -270,11 +317,23 @@ err_t lwiperf_tcp_poll(void *arg, struct tcp_pcb *tpcb)
     return ERR_OK;
 }
 
+/**
+ * @brief Request a normal TCP stop from the TCP/IP thread.
+ * @param arg Live session pointer passed to iperflwip_tcp_stop().
+ */
 void iperflwip_tcp_stop_from_cb(void *arg)
 {
     iperflwip_tcp_stop(arg, 0);
 }
 
+/**
+ * @brief Stop the timer and queue backend reporting/cleanup.
+ * @param arg Valid session pointer with an installed iperf_reportFunc.
+ * @param isError Nonzero marks a traffic error; zero requests normal shutdown.
+ * @note Ignores inactive sessions. Sets abort/error flags but leaves is_running
+ *  true until cleanup. Repeated calls may queue multiple reports. Timer and
+ *  callback failures are ignored; use serialized core context.
+ */
 void iperflwip_tcp_stop(void *arg, uint8_t isError)
 {
     session_conn_t *session_con = arg;
@@ -297,6 +356,14 @@ void iperflwip_tcp_stop(void *arg, uint8_t isError)
     tcpip_callback(session_con->iperf_reportFunc,session_con);
 }
 
+/**
+ * @brief Mark a TCP session inactive and release timer/PCB references.
+ * @param arg Valid session pointer; static session storage is not freed.
+ * @note Core context. Detaches client callbacks and aborts on normal stop. Error
+ *  paths skip abort because lwIP may have freed the PCB. Server paths close
+ *  their stored PCBs. tcp_close() results are ignored; cleared references do
+ *  not confirm graceful completion.
+ */
 void iperflwip_tcp_close(void *arg)
 {
     
@@ -357,6 +424,13 @@ void iperflwip_tcp_close(void *arg)
 }
 
 // Error callback
+/**
+ * @brief Log a raw TCP error and request error-mode reporting.
+ * @param arg Valid session callback argument.
+ * @param err Error code from lwIP.
+ * @note Core context; ignores inactive sessions. The error flag suppresses a
+ *  normal abort of a PCB that lwIP may already have freed.
+ */
 void iperflwip_tcp_err(void *arg, err_t err)
 {
     session_conn_t *session_con = (session_conn_t *)arg;
@@ -370,6 +444,13 @@ void iperflwip_tcp_err(void *arg, err_t err)
     iperflwip_tcp_stop(session_con, 1);
 }
 
+/**
+ * @brief Find an exact IPv4 address match in the local netif list.
+ * @param addr Valid address in lwIP representation.
+ * @return 0 for a match, otherwise -1.
+ * @note Does not require the matched interface to be up. Caller supplies core
+ *  context/locking; this helper does not lock the list.
+ */
 int8_t is_ip_addr_in_net_list(const ip_addr_t *addr)
 {
     struct netif *netif = netif_list;

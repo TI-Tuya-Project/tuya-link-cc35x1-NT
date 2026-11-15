@@ -29,6 +29,14 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file dhcpserver.c
+ * @brief Lightweight IPv4 DHCP server for the access-point interface.
+ * Maintains one UDP PCB, cached AP addressing and a heap-backed lease list.
+ * Packet processing and raw UDP lifecycle operations require lwIP core context
+ * or its lock. Lease setters and list helpers do not add synchronization.
+ * The caller drives dhcps_coarse_tmr() periodically to age dynamic leases.
+ */
 #include "osi_kernel.h"
 #include "lwip/inet.h"
 #include "lwip/err.h"
@@ -65,6 +73,10 @@ void wifi_softap_dhcps_client_leave(uint8_t *bssid, struct ip_addr *ip,BOOLEAN f
 uint32_t wifi_softap_dhcps_client_update(uint8_t *bssid, struct ip_addr *ip);
 
 
+/**
+ * @brief Cache the AP IPv4 address, netmask and gateway.
+ * @param netif Valid interface to copy; address values remain in lwIP byte order.
+ */
 void dhcps_set_ip_info(struct netif *netif)
 {
     ap_if_ip.netmask.addr = netif->netmask.addr;
@@ -72,6 +84,10 @@ void dhcps_set_ip_info(struct netif *netif)
     ap_if_ip.gw.addr      = netif->gw.addr;
 }
 
+/**
+ * @brief Copy cached AP addressing to the caller.
+ * @param[out] if_ip Required writable address tuple; values remain in lwIP byte order.
+ */
 void dhcps_get_ip_info(struct ip_info *if_ip)
 {
     if_ip->netmask.addr   = ap_if_ip.netmask.addr;
@@ -156,6 +172,12 @@ void   node_remove_from_list(list_node **phead, list_node* pdelete)
  * @return uint8_t* DHCP msgt
  */
 ///////////////////////////////////////////////////////////////////////////////////
+/**
+ * @brief Append a DHCP message-type option.
+ * @param optptr Writable cursor with at least three bytes remaining.
+ * @param type DHCP message-type value.
+ * @return Cursor after the appended option; no bounds check is performed.
+ */
 static uint8_t*   add_msg_type(uint8_t *optptr, uint8_t type)
 {
 
@@ -173,6 +195,12 @@ static uint8_t*   add_msg_type(uint8_t *optptr, uint8_t type)
  * @return uint8_t* DHCP msgt
  */
 ///////////////////////////////////////////////////////////////////////////////////
+/**
+ * @brief Append configured/default lease, addressing and service options.
+ * @param optptr Writable option cursor with room for all emitted options.
+ * @return Cursor following the appended options.
+ * @note Uses global server/lease/offer configuration; does not check capacity.
+ */
 static uint8_t*   add_offer_options(uint8_t *optptr)
 {
         struct ip_addr ipadd;
@@ -282,6 +310,11 @@ static uint8_t*   add_offer_options(uint8_t *optptr)
  * @return uint8_t* DHCP msgt
  */
 ///////////////////////////////////////////////////////////////////////////////////
+/**
+ * @brief Append the DHCP end-of-options marker.
+ * @param optptr Writable cursor with at least one byte remaining.
+ * @return Cursor following the marker.
+ */
 static uint8_t*   add_end(uint8_t *optptr)
 {
 
@@ -290,6 +323,12 @@ static uint8_t*   add_end(uint8_t *optptr)
 }
 ///////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////
+/**
+ * @brief Rewrite a request buffer as a broadcast DHCP reply template.
+ * @param[in,out] m Complete writable message; preserves transaction/client fields.
+ * @note Uses shared client_address, clears routing/string/options fields and
+ *  installs the magic cookie before callers append reply-specific options.
+ */
 static void   create_msg(struct dhcps_msg *m)
 {
         struct ip_addr client;
@@ -319,6 +358,12 @@ static void   create_msg(struct dhcps_msg *m)
         os_memcpy((char *) m->options, &magic_cookie1, sizeof(magic_cookie1));
 }
 
+/**
+ * @brief Allocate a contiguous RAM pbuf large enough for a DHCP message.
+ * @param len Minimum requested byte count.
+ * @return Owned pbuf sized to max(len, sizeof(struct dhcps_msg)), or NULL.
+ * @note Caller must release the result with pbuf_free().
+ */
 struct pbuf * dhcps_pbuf_alloc(u16_t len)
 {
     u16_t mlen = sizeof(struct dhcps_msg);
@@ -341,6 +386,14 @@ struct pbuf * dhcps_pbuf_alloc(u16_t len)
  * @len - len
  */
 ///////////////////////////////////////////////////////////////////////////////////
+/**
+ * @brief Build and broadcast a DHCP OFFER response.
+ * @param[in,out] m Writable message storage with capacity for the allocated reply size.
+ * @param len Minimum reply size passed to dhcps_pbuf_alloc().
+ * @note Requires core context and the global server PCB. Rewrites the request
+ *  into a reply, copies it to owned pbuf storage and frees the pbuf after send.
+ *  Allocation/send failures are not propagated; emitted options require room.
+ */
 static void   send_offer(struct dhcps_msg *m, u16_t len)
 {
         uint8_t *end;
@@ -406,6 +459,14 @@ static void   send_offer(struct dhcps_msg *m, u16_t len)
  * @param len - length
  */
 ///////////////////////////////////////////////////////////////////////////////////
+/**
+ * @brief Build and broadcast a DHCP NAK response.
+ * @param[in,out] m Writable message storage with capacity for the allocated reply size.
+ * @param len Minimum reply size passed to dhcps_pbuf_alloc().
+ * @note Requires core context and the global server PCB. Rewrites the request
+ *  into a reply, copies it to owned pbuf storage and frees the pbuf after send.
+ *  Allocation/send failures are not propagated; emitted options require room.
+ */
 static void   send_nak(struct dhcps_msg *m, u16_t len)
 {
 
@@ -471,6 +532,14 @@ static void   send_nak(struct dhcps_msg *m, u16_t len)
  * @param len - length
  */
 ///////////////////////////////////////////////////////////////////////////////////
+/**
+ * @brief Build and broadcast a DHCP ACK response.
+ * @param[in,out] m Writable message storage with capacity for the allocated reply size.
+ * @param len Minimum reply size passed to dhcps_pbuf_alloc().
+ * @note Requires core context and the global server PCB. Rewrites the request
+ *  into a reply, copies it to owned pbuf storage and frees the pbuf after send.
+ *  Allocation/send failures are not propagated; emitted options require room.
+ */
 static void   send_ack(struct dhcps_msg *m, u16_t len)
 {
 
@@ -541,6 +610,14 @@ static void   send_ack(struct dhcps_msg *m, u16_t len)
  * @return uint8_t state
  */
 ///////////////////////////////////////////////////////////////////////////////////
+/**
+ * @brief Interpret DHCP options and choose the server response state.
+ * @param optptr Readable options after the magic cookie.
+ * @param len Declared option span.
+ * @return DHCPS_STATE_* action selected from message type and requested address.
+ * @note Requires serialized access to shared client/server state. Does not fully
+ *  validate each option length before reading its fields; input must be well formed.
+ */
 static uint8_t   parse_options(uint8_t *optptr, int16_t len)
 {
         struct ip_addr client;
@@ -635,6 +712,14 @@ static uint8_t   parse_options(uint8_t *optptr, int16_t len)
 }
 ///////////////////////////////////////////////////////////////////////////////////
 ///////////////////////////////////////////////////////////////////////////////////
+/**
+ * @brief Check the cookie, update client leasing and interpret request options.
+ * @param m Valid request message containing client MAC/address and options.
+ * @param len Option span forwarded to parse_options().
+ * @return Response state, or 0 if the cookie does not match.
+ * @note Mutates global client_address/lease storage and removes released leases;
+ *  must run in serialized server context.
+ */
 static int16_t   parse_msg(struct dhcps_msg *m, u16_t len)
 {
     if(os_memcmp((char *)m->options,
@@ -667,6 +752,16 @@ static int16_t   parse_msg(struct dhcps_msg *m, u16_t len)
  * @param port
  */
 ///////////////////////////////////////////////////////////////////////////////////
+/**
+ * @brief Copy an incoming DHCP datagram and issue the selected reply.
+ * @param arg Unused callback argument.
+ * @param pcb Receiving UDP PCB; server output uses the global PCB.
+ * @param p Owned received pbuf chain, or NULL for no work.
+ * @param addr Borrowed sender address.
+ * @param port Sender port.
+ * @note Core callback. Allocates temporary message storage and frees it and the
+ *  received pbuf after processing; allocation failure drops/frees the packet.
+ */
 static void   handle_dhcp(void *arg, struct udp_pcb *pcb, struct pbuf *p,
                           const ip_addr_t *addr, u16_t port)
 
@@ -763,6 +858,12 @@ static void   handle_dhcp(void *arg, struct udp_pcb *pcb, struct pbuf *p,
         pmsg_dhcps = NULL;
 }
 ///////////////////////////////////////////////////////////////////////////////////
+/**
+ * @brief Validate the configured pool or derive a default range around the AP.
+ * @param ip AP IPv4 address in lwIP representation.
+ * @note Excludes the AP and applies the implementation subnet/range constraints.
+ *  Changes global lease configuration without locking.
+ */
 static void   wifi_softap_init_dhcps_lease(uint32_t ip)
 {
     uint32_t softap_ip = 0,local_ip = 0;
@@ -806,6 +907,14 @@ static void   wifi_softap_init_dhcps_lease(uint32_t ip)
 //  Report("start_ip = 0x%x, end_ip = 0x%x\n\r",dhcps_lease.start_ip, dhcps_lease.end_ip);
 }
 ///////////////////////////////////////////////////////////////////////////////////
+/**
+ * @brief Create/bind the AP DHCP server and register its receive callback.
+ * @param addr Server IPv4 address in lwIP representation.
+ * @param apnetif Required initialized AP interface.
+ * @note Requires core context. Initializes lease range and cached interface data.
+ *  Logs PCB allocation failure; bind errors are not reported. Starting again
+ *  without stopping replaces the global PCB reference without releasing it.
+ */
 void dhcps_start(uint32_t addr, struct netif * apnetif)
 {
 /*    struct netif * apnetif = (struct netif *)eagle_lwip_getif(0x01);
@@ -842,6 +951,11 @@ void dhcps_start(uint32_t addr, struct netif * apnetif)
 
 }
 
+/**
+ * @brief Disconnect/remove the server PCB and free all lease nodes and records.
+ * @note Requires core context and an active PCB: udp_disconnect() is called before
+ *  the NULL test. Disables the configured lease range; repeated stop is not guarded.
+ */
 void   dhcps_stop(void)
 {
     //struct netif * apnetif = (struct netif *)eagle_lwip_getif(0x01);
@@ -982,6 +1096,11 @@ BOOLEAN wifi_softap_get_dhcps_lease(struct dhcps_lease *please)
     return TRUE;
 }
 
+/**
+ * @brief Remove the lease with the smallest timer among nodes after the head.
+ * @note Requires a list with at least two nodes. The first list node is excluded
+ *  from selection. Frees both the chosen lease record and its node.
+ */
 static void   kill_oldest_dhcps_pool(void)
 {
     list_node *pre = NULL, *p = NULL;
@@ -1008,6 +1127,12 @@ static void   kill_oldest_dhcps_pool(void)
     minp = NULL;
 }
 
+/**
+ * @brief Age dynamic leases and remove expired entries.
+ * @note Call once per lease-timer unit in serialized server/core context. Static
+ *  timers are not decremented. At MAX_STATION_NUM entries, evicts a lease using
+ *  kill_oldest_dhcps_pool(); frees removed records and nodes.
+ */
 void   dhcps_coarse_tmr(void)
 {
     uint8_t num_dhcps_pool = 0;
@@ -1038,6 +1163,12 @@ void   dhcps_coarse_tmr(void)
         kill_oldest_dhcps_pool();
 }
 
+/**
+ * @brief Configure a supported DHCP offer option.
+ * @param level OFFER_ROUTER is the supported option selector.
+ * @param optarg Required pointer to a byte; its low bit enables the router option.
+ * @return TRUE when applied, FALSE for NULL or unsupported selectors.
+ */
 BOOLEAN   wifi_softap_set_dhcps_offer_option(uint8_t level, void* optarg)
 {
     BOOLEAN offer_flag = TRUE;
@@ -1060,6 +1191,12 @@ BOOLEAN   wifi_softap_set_dhcps_offer_option(uint8_t level, void* optarg)
     return offer_flag;
 }
 
+/**
+ * @brief Set the lease duration used for future timer initialization.
+ * @param minute Nonzero duration in minutes.
+ * @return TRUE when stored, FALSE for zero.
+ * @note Does not update existing lease timers or enforce a stopped-server state.
+ */
 BOOLEAN wifi_softap_set_dhcps_lease_time(uint32_t minute)
 {
     /*
@@ -1081,6 +1218,11 @@ BOOLEAN wifi_softap_set_dhcps_lease_time(uint32_t minute)
     return TRUE;
 }
 
+/**
+ * @brief Restore the configured default lease duration.
+ * @return Always TRUE.
+ * @note Does not rewrite existing lease timers.
+ */
 BOOLEAN   wifi_softap_reset_dhcps_lease_time(void)
 {
     /*
@@ -1098,11 +1240,22 @@ BOOLEAN   wifi_softap_reset_dhcps_lease_time(void)
     return TRUE;
 }
 
+/**
+ * @brief Read the configured lease duration.
+ * @return Duration in minutes.
+ */
 uint32_t   wifi_softap_get_dhcps_lease_time(void) // minute
 {
     return dhcps_lease_time;
 }
 
+/**
+ * @brief Remove a static/forced lease or mark a dynamic lease offline.
+ * @param bssid Six-byte client MAC address; NULL is ignored.
+ * @param ip Matching IPv4 address in lwIP representation; NULL is ignored.
+ * @param force Nonzero removes even a dynamic lease.
+ * @note Changes the shared lease list without locking; removed storage is freed.
+ */
 void   wifi_softap_dhcps_client_leave(uint8_t *bssid, struct ip_addr *ip,BOOLEAN force)
 {
     struct dhcps_pool *pdhcps_pool = NULL;
@@ -1140,6 +1293,15 @@ void   wifi_softap_dhcps_client_leave(uint8_t *bssid, struct ip_addr *ip,BOOLEAN
     }
 }
 
+/**
+ * @brief Create, renew or reassign a client lease.
+ * @param bssid Required six-byte client MAC address.
+ * @param ip Optional requested address; NULL/ANY requests dynamic allocation.
+ * @return Assigned address in lwIP byte order, or IPADDR_ANY if unavailable/invalid.
+ * @note May reuse offline records and allocate/free list storage. Refreshes timer,
+ *  type and online state. Requires serialized server context; allocation failures
+ *  are not checked before dereferencing new records.
+ */
 uint32_t   wifi_softap_dhcps_client_update(uint8_t *bssid, struct ip_addr *ip)
 {
     struct dhcps_pool *pdhcps_pool = NULL;

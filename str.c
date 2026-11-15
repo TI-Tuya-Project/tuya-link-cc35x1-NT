@@ -29,6 +29,13 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file str.c
+ * @brief Shared terminal command names, option descriptions and border output.
+ * Defines the text consumed by command dispatch, parsers and usage printers.
+ * Command names must remain consistent with gCmdList and their handlers.
+ * printBorder() writes through the initialized UART terminal.
+ */
 #include "network_terminal.h"
 #include "uart_term.h"
 
@@ -817,6 +824,12 @@ const char loadCertificateUsageStr[]   = "[-help] "
                                          "[-s <size>]\n\r ";
 const char loadCertificateDetailsStr[] = "Load certificate: fileType 0 - client_cert, 1 - ca_cert, 2 - private_key_cert\n\r";
 
+/**
+ * @brief Print a repeated character without adding a newline.
+ * @param ch Byte sent through putch().
+ * @param n Repetition count; zero or negative values emit nothing.
+ * @note Requires an initialized terminal; does not take the output lock.
+ */
 void printBorder(char ch, int n)
 {
     int        i = 0;

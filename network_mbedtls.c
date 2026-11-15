@@ -29,6 +29,12 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file network_mbedtls.c
+ * @brief Configure the mbedTLS mutex hooks used by the networking application.
+ * Uses config-hsm.h. MBEDTLS_THREADING_ALT selects pthread-backed hooks; the
+ * other build branch provides a no-op entry point for the same startup call.
+ */
 /* C runtime includes */
 
 #define MBEDTLS_CONFIG_FILE "config-hsm.h" // note ! need to be located before the includes of mbedtls
@@ -44,6 +50,11 @@
 #ifdef MBEDTLS_THREADING_ALT
 
 // Function to call in your main application to set the hooks
+/**
+ * @brief Install pthread mutex hooks when MBEDTLS_THREADING_ALT is enabled.
+ * @note Call during startup before concurrent mbedTLS use. The alternate build
+ *  branch is a no-op; neither branch creates a TLS session or returns status.
+ */
 void initialize_mbedtls_threading() {
     mbedtls_threading_set_alt(threading_mutex_init_pthread,
                                   threading_mutex_free_pthread,
@@ -53,5 +64,10 @@ void initialize_mbedtls_threading() {
 }
 
 #else
+/**
+ * @brief Install pthread mutex hooks when MBEDTLS_THREADING_ALT is enabled.
+ * @note Call during startup before concurrent mbedTLS use. The alternate build
+ *  branch is a no-op; neither branch creates a TLS session or returns status.
+ */
 void initialize_mbedtls_threading(){};//empty function
 #endif

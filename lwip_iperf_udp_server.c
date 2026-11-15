@@ -29,6 +29,14 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file lwip_iperf_udp_server.c
+ * @brief Raw-lwIP UDP throughput receiver for CC35XX.
+ * Queues socket setup to the TCP/IP thread. The first datagram starts reporting;
+ * negative iperf sequence IDs request shutdown. Receives count total pbuf bytes
+ * for eligible data packets and free their buffers. Timer/stop callbacks queue
+ * reporting and cleanup asynchronously; no packet-loss/ordering analysis is done.
+ */
 #include <string.h>
 #include <stdio.h>
 #include "lwip/sockets.h"
@@ -73,6 +81,13 @@ static void iperflwip_udp_server_stop(void *arg);
 static void iperflwip_udp_server_close(session_conn_t *session_con);
 
 
+/**
+ * @brief Create and bind a UDP receive PCB using the reserved server configuration.
+ * @param param Live session holding copied configuration.
+ * @note TCP/IP context. Nonzero source addresses must match a local interface.
+ *  Setup failures log and may remove the PCB but do not reliably release the
+ *  reserved running slot. Successful setup installs the receive callback.
+ */
 static void iperflwip_server_udp_init(void *param)
 {
     err_t err;
@@ -127,6 +142,17 @@ static void iperflwip_server_udp_init(void *param)
 
 
 
+/**
+ * @brief Count UDP test data and recognize negative-sequence termination packets.
+ * @param arg Live server session.
+ * @param pcb Expected session PCB; mismatch asserts.
+ * @param p Received pbuf owned by this callback, or NULL to request stop.
+ * @param addr Borrowed source address for logging.
+ * @param port Sender port for logging.
+ * @note Core context. First packet starts timing; only packets with a complete
+ *  iperf header in the first segment are counted. Frees each non-NULL pbuf.
+ *  Does not filter by source, echo packets or calculate loss/reordering.
+ */
 static void  lwiperf_udp_server_recv(void *arg, struct udp_pcb *pcb,
         struct pbuf *p, const ip_addr_t *addr, u16_t port)
 {
@@ -209,6 +235,12 @@ static void  lwiperf_udp_server_recv(void *arg, struct udp_pcb *pcb,
 }
 
 // Timer expired -> test done
+/**
+ * @brief Print UDP receive throughput and rearm or finish the server.
+ * @param arg Live server session; executes in TCP/IP context.
+ * @note Timeout/abort closes the server; intervals assume nonzero elapsed time.
+ *  Timer rearm errors are ignored and no response is sent to the transmitter.
+ */
 static void iperflwip_report(void* arg)
 {
     double secondsFromStart;
@@ -272,11 +304,22 @@ static void iperflwip_report(void* arg)
 
 }
 
+/**
+ * @brief Queue a UDP server stop request to the TCP/IP thread.
+ * @param session_con Session kept live through asynchronous report/cleanup.
+ * @note Does not wait for completion or check callback-queue status.
+ */
 void udp_server_stop(session_conn_t* session_con)
 {
     tcpip_callback(iperflwip_udp_server_stop, session_con);
 }
 
+/**
+ * @brief Cancel the report timer and queue final server reporting.
+ * @param arg Live server session with installed report callback.
+ * @note Core context. Sets the abort flag; reporting later performs cleanup.
+ *  Repeated requests are not guarded and queue errors are ignored.
+ */
 static void iperflwip_udp_server_stop(void *arg)
 {
     session_conn_t *session_con = arg;
@@ -298,6 +341,11 @@ static void iperflwip_udp_server_stop(void *arg)
 
 }
 
+/**
+ * @brief Cancel the timer, remove an active UDP PCB and clear running state.
+ * @param session_con Live server session; its static storage is retained.
+ * @note Core context. PCB removal depends on is_running; clears the pointer afterward.
+ */
 static void iperflwip_udp_server_close(session_conn_t *session_con)
 {
     if (session_con->os_timer != 0) {
@@ -323,11 +371,24 @@ static void iperflwip_udp_server_close(session_conn_t *session_con)
 }
 
 
+/**
+ * @brief Queue server reporting from a POSIX timer notification.
+ * @param sv sival_ptr identifies a session live through callback completion.
+ * @note Does not touch raw PCB state here; callback-queue errors are ignored.
+ */
 static void iperflwip_udp_os_timer_callback(union sigval sv)
 {
     tcpip_callback(iperflwip_report, sv.sival_ptr);
 }
 
+/**
+ * @brief Reserve a shared session and queue UDP server setup.
+ * @param args Valid RecvCmd_t pointer copied before returning.
+ * @return 0 after queuing setup, -1 when no candidate slot is found.
+ * @note Requires initialized lwIP; serialize slot allocation. Queue status is
+ *  unchecked and the 50-microsecond sleep is not an initialization barrier.
+ *  Search includes the table-size index, so a full table can index out of bounds.
+ */
 int32_t iperflwip_udp_server_start(void* args)
 {
     int i;
