@@ -29,6 +29,14 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file sntp_task.c
+ * @brief SNTP background client and queued synchronization control.
+ * Built with SNTP_SUPPORT. Owns the worker, synchronization primitives and
+ * server configuration used for periodic or forced time updates. Clock access
+ * and successful forced-update notification are supplied through callbacks.
+ * Use the public start/configure/force/stop lifecycle from task context.
+ */
 /*
  *  ======== sntp.c ========
  *  Contains the SNTP client 'daemon' (a Task that runs every 30 minutes to
@@ -230,6 +238,11 @@ static void sntpTask_syncTime_task(void* arg);
 /*
  *  ======== getSocketError ========
  */
+/**
+ * @brief Select the backend error representation.
+ * @param ret Backend result, returned directly for NET_SL builds.
+ * @return ret for NET_SL, otherwise current errno.
+ */
 static inline int32_t getSocketError(int32_t ret)
 {
 #if defined (NET_SL)
@@ -250,6 +263,11 @@ static inline int32_t getSocketError(int32_t ret)
  *  AF_INET6).
  *
  *  Must be called with appropriate Semaphore protection (using g_sntpMutex)
+ */
+/**
+ * @brief Advance or wrap the configured server cursor.
+ * @param family Current address family used to advance the byte position.
+ * @note Requires g_sntpMutex protection and a nonempty configured list.
  */
 static void changeServer(uint8_t family)
 {
@@ -294,6 +312,11 @@ static void changeServer(uint8_t family)
  *
  *      0 - str does not contain any of the above KOD codes
  */
+/**
+ * @brief Recognize the RATE, DENY or RSTR server-rejection prefix.
+ * @param str Readable four-byte code, not necessarily NUL-terminated.
+ * @return Corresponding SNTP_KOD_*_CODE value, or 0 for an unrecognized code.
+ */
 static int32_t hasKissCode(char *str)
 {
     if (strncmp((char *)SNTP_KOD_RATE_STR, str, SNTP_KOD_ERROR_CODE_SIZE)
@@ -324,6 +347,16 @@ static int32_t hasKissCode(char *str)
  *  either IPv4 or IPv6.
  *
  *  Returns 0 on success, 1 on failure.
+ */
+/**
+ * @brief Create/connect a UDP netconn for one server.
+ * @param[in,out] con Required connection slot; receives new owned netconn or NULL.
+ * @param cs Valid configured server address with the port convention expected here.
+ * @param waitTime Receive timeout in milliseconds.
+ * @return 0 on success, 1 on allocation/connect failure.
+ * @note Caller owns netconn_delete(). The existing replacement branch deletes
+ *  local pCon (NULL) rather than the previous *con, so it does not release an
+ *  existing connection correctly. Bind status is not checked.
  */
 static int32_t sntpConnSetup(struct netconn **con, struct sockaddr *cs, uint32_t waitTime)
 {
@@ -386,6 +419,18 @@ static int32_t sntpConnSetup(struct netconn **con, struct sockaddr *cs, uint32_t
 
 /*
  *  ======== sntpTask_start ========
+ */
+/**
+ * @brief Create the SNTP control objects and background worker.
+ * @param get Required getter returning Unix epoch seconds.
+ * @param set Required setter accepting Unix epoch seconds.
+ * @param timeUpdatedHook Optional successful forced-update observer.
+ * @param storedServers Borrowed packed sockaddr array, kept live until stop/reconfiguration.
+ * @param numservers Nonzero server count.
+ * @param stacksize FreeRTOS stack depth; zero selects SNTP_TASK_STACKSIZE.
+ * @return 0 when started, 1 on validation/create failure.
+ * @note Call from task context before forcing sync. Rejects an already initialized
+ *  service through the shared failure cleanup path; do not call twice without stop.
  */
 int32_t sntpTask_start(uint32_t (*get)(void), void (*set)(uint32_t newtime),
         void (*timeUpdatedHook)(void *),struct sockaddr *storedServers,
@@ -490,6 +535,12 @@ EXIT_FAIL:
 /*
  *  ======== sntpTask_stop ========
  */
+/**
+ * @brief Queue stop, wait for worker exit and delete synchronization objects.
+ * @note No-op when uninitialized. Can wait indefinitely; queue-write status is
+ *  ignored. Do not call from the worker/update hook. Resets callbacks and server
+ *  references without freeing the caller-owned address array.
+ */
 void sntpTask_stop(void)
 {
     sntpMsg_t sntpMsg;
@@ -544,6 +595,13 @@ void sntpTask_stop(void)
 /*
  *  ======== sntpTask_configServers ========
  */
+/**
+ * @brief Replace the borrowed server list under the SNTP mutex.
+ * @param storedServers Valid packed address array, retained rather than copied.
+ * @param numservers Server count; caller must supply a nonzero valid count.
+ * @note Requires initialized service. Resets the cursor; logs lock errors but
+ *  exposes no return status. Keep the list live and synchronize external edits.
+ */
 void sntpTask_configServers(struct sockaddr *storedServers, uint32_t numservers)
 {
     int32_t ret;
@@ -576,6 +634,12 @@ void sntpTask_configServers(struct sockaddr *storedServers, uint32_t numservers)
 /*
  *  ======== sntpTask_forceTimeSync ========
  */
+/**
+ * @brief Queue an immediate time-update request without waiting for completion.
+ * @return -1 if uninitialized, otherwise 0; queue-write status is ignored.
+ * @note Requires a started service; successful scheduling does not establish a
+ *  synchronized clock. The registered update hook reports a successful forced update.
+ */
 int32_t sntpTask_forceTimeSync(void)
 {
     sntpMsg_t sntpMsg;
@@ -605,6 +669,14 @@ int32_t sntpTask_forceTimeSync(void)
  *
  *  Task that runs every 30 minutes to synchronize the local time
  *  with the actual time received from the NTP servers.
+ */
+/**
+ * @brief Service periodic/forced SNTP requests and stop events.
+ * @param arg Unused worker argument.
+ * @note Uses configured time callbacks, rotates servers on failures and handles
+ *  server rejection/backoff. Runs netconn operations in task context; successful
+ *  forced updates invoke the observer synchronously. Releases its connection,
+ *  signals the stop waiter and deletes itself on termination.
  */
 static void sntpTask_syncTime_task(void* arg)
 {

@@ -29,6 +29,13 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file sntp_wrapper.c
+ * @brief Command-facing wrapper for one-shot SNTP date/time updates.
+ * Under SNTP_SUPPORT, stores up to three IPv4 server addresses and waits on
+ * a shared synchronization object for the SNTP update hook. Call from task
+ * context and serialize configuration/update calls; shared state is not locked.
+ */
 #include <stdio.h>
 #include <string.h>
 
@@ -71,12 +78,27 @@ static OsiSyncObj_t g_sntpSemTimeUpdate = NULL;
  *  ======== timeUpdateHook ========
  *  Called after NTP time sync
  */
+/**
+ * @brief Signal the current wrapper wait after an SNTP update.
+ * @param p Unused callback argument.
+ * @note Requires an active g_sntpSemTimeUpdate; updateDateTime() owns its lifetime.
+ */
 void sntpWrapper_timeUpdateHook(void *p)
 {
    osi_SyncObjSignal(&g_sntpSemTimeUpdate);
 }
 
 //defines the NTP servers ip addresses
+/**
+ * @brief Store the IPv4 servers used by the next SNTP update.
+ * @param numOfServers Number of servers; caller must restrict this to 0 through 3.
+ * @param sntpServer1IP Valid dotted IPv4 string when numOfServers is at least 1.
+ * @param sntpServer2Ip Valid dotted IPv4 string when numOfServers is at least 2.
+ * @param sntpServer3Ip Valid dotted IPv4 string when numOfServers is 3.
+ * @note Uses a shared fixed buffer. inet_pton() results are not checked. The
+ *  supplied count is stored without validation; zero disables update attempts.
+ *  Stores port 123 directly, without htons(), as in the existing implementation.
+ */
 void sntpWrapper_store_servers(uint32_t numOfServers,char* sntpServer1IP,char* sntpServer2Ip, char* sntpServer3Ip )
 {
     struct sockaddr_in ntpAddr;
@@ -118,6 +140,14 @@ void sntpWrapper_store_servers(uint32_t numOfServers,char* sntpServer1IP,char* s
 }
 /*
  *  ======== test ========
+ */
+/**
+ * @brief Start SNTP, force an update and wait up to 50000 ms for its hook.
+ * @return -1 if no servers are configured or synchronization/task startup fails;
+ *  0 after the wait, including a wait timeout (not proof of synchronized time).
+ * @note Uses datetime getters/setters. Stops the SNTP task and deletes the wait
+ *  object after the wait. Call from task context with networking ready; concurrent
+ *  calls are unsupported because the server buffer and wait handle are shared.
  */
 int32_t sntpWrapper_updateDateTime()
 {

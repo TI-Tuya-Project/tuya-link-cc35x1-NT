@@ -29,6 +29,15 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file cmd_parser.c
+ * @brief Terminal option parsers for WLAN, BLE and network commands.
+ * Most parsers copy input into bounded local buffers, tokenize with strtok()
+ * and populate caller-owned parameter structures. Serialize parsing because
+ * strtok() uses shared state. Individual parsers differ in defaults, allocation
+ * ownership and error conventions; a successful parse is not driver validation.
+ * The optional certificate loader also reads UART data and changes global buffers.
+ */
 /* General includes */
 #include <stdlib.h>
 #include "string.h"
@@ -2372,6 +2381,14 @@ int32_t ParseCsiSolicSetMacCmd(void *arg, WlanCfgCsiSolSetMac_t* csiSolMacSet)
 
 #endif
 
+/**
+ * @brief Parse the primary connectivity-firmware slot option.
+ * @param arg Valid CLI argument string.
+ * @param[out] WsocSlot Required output structure; populated for the -i option.
+ * @return 0 on accepted syntax, -1 for empty/unrecognized options.
+ * @note Does not validate slot range or require a value after every -i; initialize
+ *  output before calling and validate it before use.
+ */
 int32_t ParseSetWsocPrimaryCmd(void *arg, WlanConnectivityFWSlot_t *WsocSlot)
 {
     char cmdStr[CMD_BUFFER_LEN + 1];
@@ -2487,6 +2504,14 @@ int32_t ParseCmd(void *arg)
     \sa             cmdEnableWoWLANCallback
  */
 #if 0 // RazB - LWip implemntation
+/**
+ * @brief Parse a quoted wake pattern and host action identifier.
+ * @param arg Valid CLI option string.
+ * @param[out] WoWLANEnableParams Required caller-owned parameter structure.
+ * @return 0 when pattern/action options are present, -1 with usage on failure.
+ * @note Uses shared strtok() state; callers must initialize output and honor
+ *  the documented pattern buffer limits before sending a driver request.
+ */
 int32_t ParseEnableWoWLANCmd(void *arg,
                              WoWLANEnableCmd_t *WoWLANEnableParams)
 {
@@ -5604,6 +5629,13 @@ int32_t ParseBleConnUpdateCmd(void *arg, ConnUpdateParams_t* params)
     return(0);
 }
 
+/**
+ * @brief Parse BLE connection handle and preferred PHY options.
+ * @param arg Valid CLI argument string.
+ * @param[out] params Required structure, cleared before parsing; TX/RX default to 1M.
+ * @return 0 on accepted options, -1 with usage output for empty/unknown options.
+ * @note Missing option values retain defaults; numeric conversions are not range-checked.
+ */
 int32_t ParseBleSetPhyCmd(void *arg, SetPhyParams_t* params)
 {
     char       cmdStr[CMD_BUFFER_LEN + 1];
@@ -5692,6 +5724,13 @@ int32_t printRoleIdGetUsage(void *arg)
 }
 
 
+/**
+ * @brief Parse a quoted role selection, defaulting to AP.
+ * @param arg Valid CLI argument string with a value after -r.
+ * @param[out] role Required output; a value beginning with sta selects STA.
+ * @return 0 for accepted options, -1 for empty/help/unknown options.
+ * @note Other role strings select AP. Missing -r values are not NULL-checked.
+ */
 int32_t ParseGetRoleId(void *arg, WlanRole_e* role)
 {
     char            *token = NULL;
@@ -5745,6 +5784,13 @@ int32_t ParseGetRoleId(void *arg, WlanRole_e* role)
 }
 
 #ifdef CC35XX
+/**
+ * @brief Parse a peer-aging timeout from the -t option.
+ * @param arg Valid CLI argument string.
+ * @param[out] timeOut Required output pointer; only written when a value is present.
+ * @return 0 for accepted syntax, -1 for empty/help/unknown options.
+ * @note Uses atoi() without range validation; initialize the output before calling.
+ */
 int32_t ParseSetpeerAgingTimeout(void *arg, uint32_t* timeOut)
 {
     char            *token = NULL;
@@ -6419,6 +6465,11 @@ int32_t printSntpConfigServersUsage(void *arg)
 
 
 
+/**
+ * @brief Print Sntp Update Date Time command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printSntpUpdateDateTimeUsage(void *arg)
 {
     Report(lineBreak);
@@ -6438,6 +6489,19 @@ int32_t printSntpUpdateDateTimeUsage(void *arg)
 
 
 
+/**
+ * @brief Parse -t YYYY-MM-DDTHH:MM:SS into calendar fields.
+ * @param arg Valid CLI argument string.
+ * @param[out] pYear Required year output.
+ * @param[out] pMonth Required month output.
+ * @param[out] pDay Required day output.
+ * @param[out] pHour Required hour output.
+ * @param[out] pMinute Required minute output.
+ * @param[out] pSecond Required second output.
+ * @return 0 for accepted options, -1 for missing/unknown options.
+ * @note Uses temporary heap storage. Allocation, sscanf() field count and calendar
+ *  ranges are not checked; success does not establish that every field is valid.
+ */
 int32_t ParseSetDateTimeCmd(void *arg, uint32_t* pYear, uint32_t* pMonth,
         uint32_t* pDay, uint32_t* pHour, uint32_t* pMinute,
         uint32_t* pSecond)
@@ -6553,6 +6617,16 @@ int32_t printGetDateTimeUsage(void *arg)
 
 #ifdef CC35XX_INDIGO_APP
 
+/**
+ * @brief Parse a certificate type/size and receive its raw bytes over UART.
+ * @param arg CLI options containing both type and byte count.
+ * @param loadCertificate Unused parameter; loaded data goes to global certificate records.
+ * @return 0 after loading, 1 on empty/unrecognized syntax, -1 for allocation/type failure.
+ * @note Releases the selected previous record first. Nonzero sizes allocate storage,
+ *  print ACK and call getstr(); the globals own the buffer until released. No NUL
+ *  terminator is added and UART byte-count completion is not checked. Requires
+ *  task context and exclusive access to certificate state and terminal input.
+ */
 int32_t ParseLoadCartificateCmd(void *arg, LoadCertiCmd_t *loadCertificate)
 {
     char    cmdStr[CMD_BUFFER_LEN + 1];
@@ -6686,6 +6760,11 @@ int32_t ParseLoadCartificateCmd(void *arg, LoadCertiCmd_t *loadCertificate)
     return(0);
 }
 
+/**
+ * @brief Print load Certificate command syntax and option descriptions.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printloadCertificateUsage(void *arg)
 {
     UART_PRINT(lineBreak);

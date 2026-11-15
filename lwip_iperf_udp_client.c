@@ -29,6 +29,14 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
+/**
+ * @file lwip_iperf_udp_client.c
+ * @brief Raw-lwIP UDP throughput generator for CC35XX.
+ * Uses a FreeRTOS worker to queue paced sends to the TCP/IP thread and POSIX
+ * timer notifications to queue rate reports. Counts successful local UDP sends,
+ * not peer delivery. Uses the shared session table and mutable send_buffer;
+ * callers must serialize allocation and preserve callback argument lifetimes.
+ */
 #include <string.h>
 #include <stdio.h>
 #include "lwip/sockets.h"
@@ -79,6 +87,12 @@ static void iperflwip_udp_close(void *arg);
 static void iperflwip_send_udp_client_iperf_fin(session_conn_t* session_con);
 
 
+/**
+ * @brief Initialize UDP client state, its report timer and a sending worker.
+ * @param param Live reserved session with copied configuration.
+ * @note TCP/IP context. Converts bandwidth in Mbps to bytes/second. Timer/task
+ *  errors are not propagated to the start caller; session storage remains shared.
+ */
 static void iperflwip_client_udp_init(void *param)
 {
     struct sigevent         event;
@@ -155,6 +169,14 @@ static void iperflwip_client_udp_init(void *param)
 }
 
 
+/**
+ * @brief Queue UDP sends using an optional 100-ms bandwidth budget.
+ * @param arg Live client session; borrowed until the worker exits.
+ * @note Caps packet length to 1470 bytes and checks free heap before queuing.
+ *  The send length is shared with callbacks rather than copied per request.
+ *  Stops when is_running clears, queues final cleanup, then deletes itself.
+ *  Unpaced or low-heap paths can spin without an explicit task delay.
+ */
 void udp_client_task(void *arg) {
     session_conn_t* session_con = arg;
     uint32_t throughput_timer;
@@ -238,6 +260,12 @@ void udp_client_task(void *arg) {
 
 }
 
+/**
+ * @brief Stop the UDP client timer and queue an abort report.
+ * @param session_con Live client session with report callback.
+ * @note Does not wait for shutdown or immediately clear is_running. Timer and
+ *  callback errors are ignored; keep storage live through report/worker cleanup.
+ */
 void udp_client_stop(session_conn_t* session_con)
 {
     if (session_con->os_timer != 0) {
@@ -257,6 +285,12 @@ void udp_client_stop(session_conn_t* session_con)
 }
 
 
+/**
+ * @brief Mark the client stopped and remove its timer and UDP PCB.
+ * @param session_con Live client session; static storage is retained.
+ * @note Requires core context. Clears PCB/timer references; worker observes the
+ *  stop flag and separately queues iperflwip_udp_close().
+ */
 void iperflwip_udp_client_close(session_conn_t* session_con)
 {
     session_con->is_running = false;
@@ -288,6 +322,14 @@ static void  lwiperf_udp_client_recv(void *arg, struct udp_pcb *pcb,
 
 
 // Send function: chunked sending as fast as possible
+/**
+ * @brief Send the current queued UDP byte budget.
+ * @param arg Live session with a valid UDP PCB and destination.
+ * @note Core callback. Copies shared send_buffer to an allocated pbuf, then
+ *  updates the shared buffer header for later sends (not the already copied
+ *  payload). Assumes the first pbuf segment fits len. Successful local sends
+ *  increment counters; frees the pbuf and clears requested length on failure.
+ */
 void  iperflwip_udp_client_tx(void* arg)
 {
     struct pbuf *p;
@@ -335,6 +377,12 @@ void  iperflwip_udp_client_tx(void* arg)
     pbuf_free(p);
 }
 
+/**
+ * @brief Send one negative-sequence iperf termination datagram.
+ * @param session_con Live client with destination and UDP PCB.
+ * @note Core context. Allocates/frees a temporary RAM pbuf; send status is ignored.
+ *  Sends no retry and waits for no acknowledgement.
+ */
 static void iperflwip_send_udp_client_iperf_fin(session_conn_t* session_con)
 {
     struct iperf_udp_hdr fin_pkt;
@@ -357,6 +405,12 @@ static void iperflwip_send_udp_client_iperf_fin(session_conn_t* session_con)
 }
 
 // Timer expired -> test done
+/**
+ * @brief Print UDP send throughput and rearm or finish the client.
+ * @param arg Live client session; executes in TCP/IP context.
+ * @note Counts locally sent bytes, not delivery. Timeout/abort sends one iperf
+ *  FIN and closes the client. Timer errors are not returned.
+ */
 static void iperflwip_report(void* arg)
 {
     char ratestr[IPERF_LWIP_MAX_FORMAT_RATE_LENGTH];
@@ -427,6 +481,11 @@ static void iperflwip_report(void* arg)
 }
 
 
+/**
+ * @brief Detach UDP receive handling and remove the PCB/timer after worker exit.
+ * @param arg Live client session.
+ * @note Core callback; clears references and is_running without freeing the slot.
+ */
 static void iperflwip_udp_close(void *arg)
 {
     session_conn_t *session_con = arg;
@@ -449,11 +508,24 @@ static void iperflwip_udp_close(void *arg)
 }
 
 
+/**
+ * @brief Queue a client report from the timer notification thread.
+ * @param sv sival_ptr is a session live through queued callback completion.
+ * @note Callback-queue errors are ignored.
+ */
 static void iperflwip_client_udp_os_timer_callback(union sigval sv)
 {
     tcpip_callback(iperflwip_report, sv.sival_ptr);
 }
 
+/**
+ * @brief Reserve a shared session and queue UDP client setup.
+ * @param args Valid RecvCmd_t pointer copied before returning.
+ * @return 0 after queuing setup, -1 when no candidate slot is found.
+ * @note Requires initialized lwIP; serialize slot allocation. Queue status is
+ *  unchecked and the 50-microsecond sleep is not an initialization barrier.
+ *  Search includes the table-size index, so a full table can index out of bounds.
+ */
 int32_t iperflwip_udp_client_start(void* args)
 {
     int i;

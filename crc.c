@@ -13,6 +13,14 @@
  *  - ReflectOut    = False
  *  - Algorithm     = table-driven
  */
+/**
+ * @file crc.c
+ * @brief Incremental table-driven CRC-8 updates over byte buffers.
+ * Preserves the generated polynomial/configuration above. Initialize using
+ * crc_init(), update chunks, then use crc_finalize() from crc.h. Only the
+ * immutable lookup table is shared; there is no allocation or I/O.
+ */
+
 #include "crc.h" /* include the header file generated with pycrc */
 #include <stdlib.h>
 #include <stdint.h>
@@ -36,6 +44,15 @@ static const crc_t crc_table[256] =
      0xf5, 0x62, 0x4c, 0xdb, 0x4d, 0xda, 0xf4, 0x63, 0xa8, 0x3f, 0x11, 0x86, 0xaa, 0x3d, 0x13, 0x84, 0x4f, 0xd8, 0xf6,
      0x61, 0xf7, 0x60, 0x4e, 0xd9, 0x12, 0x85, 0xab, 0x3c};
 
+/**
+ * @brief Extend a CRC-8 state with a chunk of bytes.
+ * @param crc State from crc_init() or the preceding update.
+ * @param data Readable data_len-byte buffer; NULL is permitted for zero length.
+ * @param data_len Number of bytes processed in order.
+ * @return Updated CRC, unchanged for zero length.
+ * @note Input is borrowed and unchanged. Call crc_finalize() after the final
+ *  chunk. Independent updates are safe with immutable input.
+ */
 crc_t crc_update(crc_t crc, const void *data, size_t data_len)
 {
     const unsigned char *d = (const unsigned char *)data;

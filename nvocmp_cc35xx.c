@@ -311,6 +311,12 @@ enum {NVOCMP_FINDANY = 0x00, NVOCMP_FINDSYSID, NVOCMP_FINDITMID, NVOCMP_FINDSTRI
 #ifdef NVDEBUG
 extern void nvprint(char * message);
 extern void Main_assertHandler(uint8_t assertReason);
+/**
+ * @brief Emit an NV diagnostic when an assertion condition is false.
+ * @param cond Condition to check; true does nothing.
+ * @param message Diagnostic string passed to nvprint().
+ * @param fatal Nonzero invokes Main_assertHandler(0) after logging.
+ */
 static void NVOCMP_assert(bool cond, char *message, bool fatal)
 {
     if (!cond)
@@ -973,6 +979,11 @@ extern void NVOCMP_setCheckVoltage(void *funcPtr)
  * @return  none
  */
 static lowVoltCbFptr NVOCMP_lowVoltCbFptr = NULL;
+/**
+ * @brief Register the NV low-voltage callback on non-Linux builds.
+ * @param funcPtr Callback pointer stored for subsequent voltage checks.
+ * @note NV_LINUX builds perform no registration. No callback ownership or locking.
+ */
 extern void NVOCMP_setLowVoltageCb(lowVoltCbFptr funcPtr)
 {
 #ifndef NV_LINUX
@@ -1013,6 +1024,15 @@ static bool NVOCMP_checkVoltage(void)
 #endif
 
 #ifdef NVDEBUG
+/**
+ * @brief Write a test byte buffer directly to an NV flash location.
+ * @param pg NV page index.
+ * @param off Page-relative flash offset.
+ * @param len Write count; source is the address of the one-byte buf parameter.
+ * @param buf Byte supplied as write data.
+ * @note Test-only corruption helper: len must not exceed the available one-byte
+ *  source object. Writes with post-verification; NVS status is not returned.
+ */
 void NVOCMP_corruptData(uint8_t pg, uint16_t off, uint16_t len, uint8_t buf)
 {
     NVS_write(NVOCMP_nvsHandle, NVOCMP_FLASHOFFSET(pg, off), (uint8_t *)&buf, len, NVS_WRITE_POST_VERIFY);
@@ -3767,6 +3787,14 @@ static void NVOCMP_changePageState(NVOCMP_nvHandle_t *pNvHandle, uint8_t pg,
  * @return  Number of bytes from start of page to next available item location
  */
 #if NVOCMP_FASTOFF
+/**
+ * @brief Search backward for the end of non-erased data in an NV page.
+ * @param pg Flash page index.
+ * @param ofs Valid aligned scan boundary within that page.
+ * @return Calculated byte offset following the last detected programmed byte.
+ * @note Caller supplies NV serialization. Buffered and direct-read build variants
+ *  use the same backward word/byte scan; no independent read status is returned.
+ */
 static uint16_t NVOCMP_findOffset(uint8_t pg, uint16_t ofs)
 {
     uint8_t i,j;
@@ -3814,6 +3842,14 @@ static uint16_t NVOCMP_findOffset(uint8_t pg, uint16_t ofs)
     return(ofs + j);
 }
 #else
+/**
+ * @brief Search backward for the end of non-erased data in an NV page.
+ * @param pg Flash page index.
+ * @param ofs Valid aligned scan boundary within that page.
+ * @return Calculated byte offset following the last detected programmed byte.
+ * @note Caller supplies NV serialization. Buffered and direct-read build variants
+ *  use the same backward word/byte scan; no independent read status is returned.
+ */
 static uint16_t NVOCMP_findOffset(uint8_t pg, uint16_t ofs)
 {
     uint8_t i,j;
@@ -3862,6 +3898,19 @@ static uint16_t NVOCMP_findOffset(uint8_t pg, uint16_t ofs)
  *
  */
 #if NVOCMP_FASTITEM
+/**
+ * @brief Search active NV records using the selected identifier/content policy.
+ * @param pNvHandle Required initialized NV handle with page traversal state.
+ * @param pg Starting flash page.
+ * @param ofs Starting backward scan offset.
+ * @param[in,out] pHdr Required search identifiers; replaced with the matching header.
+ * @param flag NVOCMP_FIND* identifier mode and optional content-match flags.
+ * @param pInfo Content comparison/scratch descriptor when FINDCONTENT is selected.
+ * @return NVINTF_SUCCESS for a match, NVINTF_NOTFOUND after exhaustion, or
+ *  NVINTF_BADPARAM for an unsupported search selector.
+ * @note May compact corrupted pages and restart traversal; requires caller-owned
+ *  NV synchronization and valid scratch buffers. Clears pHdr->hofs when not found.
+ */
 static int8_t NVOCMP_findItem(NVOCMP_nvHandle_t *pNvHandle, uint8_t pg, uint16_t ofs,
                               NVOCMP_itemHdr_t *pHdr, int8_t flag, NVOCMP_itemInfo_t *pInfo)
 {
@@ -4024,6 +4073,19 @@ static int8_t NVOCMP_findItem(NVOCMP_nvHandle_t *pNvHandle, uint8_t pg, uint16_t
     return(NVINTF_NOTFOUND);
 }
 #else
+/**
+ * @brief Search active NV records using the selected identifier/content policy.
+ * @param pNvHandle Required initialized NV handle with page traversal state.
+ * @param pg Starting flash page.
+ * @param ofs Starting backward scan offset.
+ * @param[in,out] pHdr Required search identifiers; replaced with the matching header.
+ * @param flag NVOCMP_FIND* identifier mode and optional content-match flags.
+ * @param pInfo Content comparison/scratch descriptor when FINDCONTENT is selected.
+ * @return NVINTF_SUCCESS for a match, NVINTF_NOTFOUND after exhaustion, or
+ *  NVINTF_BADPARAM for an unsupported search selector.
+ * @note May compact corrupted pages and restart traversal; requires caller-owned
+ *  NV synchronization and valid scratch buffers. Clears pHdr->hofs when not found.
+ */
 static int8_t NVOCMP_findItem(NVOCMP_nvHandle_t *pNvHandle, uint8_t pg, uint16_t ofs,
                               NVOCMP_itemHdr_t *pHdr, int8_t flag, NVOCMP_itemInfo_t *pInfo)
 {

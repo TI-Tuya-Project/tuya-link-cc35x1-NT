@@ -29,17 +29,14 @@
  * OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE,
  * EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
-/* This example demonstrates the McSPI RX and TX operation configured
- * in blocking, interrupt mode of operation.
- *
- * This example sends a known data in the TX mode of length APP_MCSPI_MSGSIZE
- * and then receives the same in RX mode. Internal pad level loopback mode
- * is enabled to receive data.
- * To enable internal pad level loopback mode, D0 pin is configured to both
- * TX Enable as well as RX input pin in the SYSCFG.
- *
- * When transfer is completed, TX and RX buffer data are compared.
- * If data is matched, test result is passed otherwise failed.
+/**
+ * @file network_terminal.c
+ * @brief Network terminal startup, WLAN event handling and command dispatch.
+ * Initializes console, application synchronization objects and lwIP; CC35XX
+ * also installs TLS mutex hooks and redirects Tuya logs to the UART. Startup
+ * tries configured Wi-Fi networks, then services the command prompt. The
+ * extra lwIP status callback requests Tuya task creation once on a nonzero
+ * STA address. WLAN callbacks update shared app_CB and signal waiting commands.
  */
 
 #include <stdlib.h>
@@ -416,6 +413,14 @@ appControlBlock     app_CB;
     \sa            cmdWlanConnectCallback,cmdWlanDisconnectCallback.
 
 */
+/**
+ * @brief Apply WLAN events to application state, interfaces and command waiters.
+ * @param pWlanEvent Borrowed event payload; NULL is ignored.
+ * @note Handles connection/disconnection, scan results, peer counts, diagnostics
+ *  and CC35XX P2P role changes. Does not retain the event. Requires initialized
+ *  app_CB synchronization objects and lwIP. Some P2P paths wait for role-up and
+ *  assert on timeout; this is a driver/task callback, not an ISR entry point.
+ */
 void WlanStackEventHandler(WlanEvent_t *pWlanEvent)
 {
     void *staif = NULL;
@@ -896,6 +901,14 @@ void WlanStackEventHandler(WlanEvent_t *pWlanEvent)
     \sa             GetCmd
 
 */
+/**
+ * @brief Read console commands and dispatch matching gCmdList callbacks.
+ * @param arg Unused callback argument.
+ * @return 0 after app_CB.Exit becomes true; normally runs indefinitely.
+ * @note Uses shared app_CB.CmdBuffer and strtok(); use one prompt task. Empty
+ *  input is skipped. Negative GetCmd() results are not handled separately and
+ *  still enter parsing. Callback arguments point inside the shared input buffer.
+ */
 int32_t cmd_prompt(void *arg)
 {
     int32_t     lRetVal = 1;
@@ -968,6 +981,12 @@ int32_t cmd_prompt(void *arg)
     \sa             GetCmd
 
 */
+/**
+ * @brief Display usage for a named command or list the available commands.
+ * @param arg Valid NUL-terminated argument string; copied before tokenization.
+ * @return Always 0, including unknown command names.
+ * @note Dispatches the matched usage callback with the original argument pointer.
+ */
 int32_t cmdHelpCallback(void *arg)
 {
     uint32_t    i = 0;
@@ -1022,6 +1041,11 @@ int32_t cmdHelpCallback(void *arg)
     \sa             cmdHelpCallback
 
 */
+/**
+ * @brief Print the help command syntax and description.
+ * @param arg Unused command argument.
+ * @return Always 0.
+ */
 int32_t printHelpUsage(void *arg)
 {
     UART_PRINT(lineBreak);
@@ -1047,6 +1071,11 @@ int32_t printHelpUsage(void *arg)
     \sa             printClearUsage
 
  */
+/**
+ * @brief Clear the terminal when the numeric CC35XX setting is enabled.
+ * @param arg Unused command argument.
+ * @return Always 0, including builds where no clearing occurs.
+ */
 int32_t cmdClearcallback(void *arg)
 {
 #if CC35XX // Was ifdef 0 in mx
@@ -1064,6 +1093,11 @@ int32_t cmdClearcallback(void *arg)
 
     \sa             cmdClearcallback
 
+ */
+/**
+ * @brief Print the clear command description.
+ * @param arg Unused command argument.
+ * @return Always 0.
  */
 int32_t printClearUsage(void *arg)
 {
@@ -1088,6 +1122,12 @@ int32_t printClearUsage(void *arg)
 
     \return         void
 
+ */
+/**
+ * @brief Print an address using the application's byte-order convention.
+ * @param ipv6 Nonzero selects 16 IPv6 bytes; zero selects a uint32_t IPv4 value.
+ * @param ip Address storage of the selected type; NULL produces no output.
+ * @note IPv6 is printed in full hexadecimal groups without compression.
  */
 void PrintIPAddress(unsigned char ipv6,
                     void *ip)
@@ -1132,6 +1172,11 @@ void PrintIPAddress(unsigned char ipv6,
     \sa             cmd_prompt
 
  */
+/**
+ * @brief Print gCmdList command names in four-column rows with a border.
+ * @return Always 0.
+ * @note Uses an 8-bit iteration index; the command count must fit its range.
+ */
 int32_t showAvailableCmd()
 {
     uint8_t i = 0;
@@ -1174,6 +1219,12 @@ int32_t showAvailableCmd()
     \sa             sl_DeviceGet, sl_NetCfgGet
 
 */
+/**
+ * @brief Print application constants and the selected compiler family.
+ * @param appName Ignored; uses APPLICATION_NAME.
+ * @param appVersion Ignored; uses APPLICATION_VERSION.
+ * @return Always 0; does not query firmware versions or report UART errors.
+ */
 int32_t DisplayAppBanner(char* appName, char* appVersion)
 {
     Report("******************************************************************\r\n");
@@ -1201,6 +1252,12 @@ int32_t DisplayAppBanner(char* appName, char* appVersion)
     \sa             MainThread
 
 */
+/**
+ * @brief Reset application fields and create command synchronization objects.
+ * @return 0 on success, -1 on the first synchronization-object creation failure.
+ * @note Earlier successful allocations are not rolled back on failure. Call
+ *  before registering event users; repeating this reset can lose live handles.
+ */
 int32_t    initAppVariables(void)
 {
     int32_t ret = 0;
@@ -1262,12 +1319,23 @@ int32_t    initAppVariables(void)
     return(ret);
 }
 
+/**
+ * @brief Placeholder allocator that performs no allocation.
+ * @param memb Ignored element count.
+ * @param len Ignored element size.
+ * @return Always NULL; this is not a working calloc replacement.
+ */
 void *mycalloc(uint32_t memb,size_t len)
 {
     return 0;
 }
 
 
+/**
+ * @brief Placeholder allocator that performs no allocation.
+ * @param len Ignored byte count.
+ * @return Always NULL; this is not a working zeroing allocator.
+ */
 void *myzalloc(size_t len)
 {
     return 0;
@@ -1275,6 +1343,13 @@ void *myzalloc(size_t len)
 
 
 #ifdef TERMINAL_TAB_COMPLETION
+/**
+ * @brief Copy command names into heap storage and register tab completion.
+ * @note Compiled under TERMINAL_TAB_COMPLETION. Allocates an array and each name;
+ *  on copy allocation failure, releases partial storage and logs an error.
+ *  Successful storage is released by freeCompletionArray(). Count/name lengths
+ *  are narrowed to uint8_t and must fit. Initialize once before using GetCmd().
+ */
 void initCompletions()
 {
     uint8_t len = gMaxCmd;
@@ -1317,6 +1392,12 @@ void initCompletions()
 /* Tuya's log.c writes via fprintf(stderr,...), which is not wired to the
  * CC35XX UART. Re-route every log record to the network_terminal console so
  * cloud bring-up status (SNTP, MQTT connect, DP reports) is visible. */
+/**
+ * @brief Redirect a Tuya log event to the terminal with source metadata.
+ * @param ev Valid borrowed event containing format, arguments and source data.
+ * @note Consumes ev->ap using vsnprintf(). The 256-byte stack buffer truncates
+ *  long text to 255 characters plus NUL; no event storage is retained.
+ */
 static void tuya_uart_log_cb(log_Event *ev)
 {
     char buf[256];
@@ -1325,6 +1406,14 @@ static void tuya_uart_log_cb(log_Event *ev)
            log_level_string(ev->level), ev->file, ev->line, buf);
 }
 
+/**
+ * @brief Request Tuya task startup on the first nonzero STA address.
+ * @param role WLAN role identified by the lwIP status callback.
+ * @param address IPv4 address in lwIP storage byte order; zero is ignored.
+ * @note Sets its static guard before calling tuya_app_start(); failure therefore
+ *  prevents later retries. Assumes serialized callback invocation and does not
+ *  restart or stop the task on subsequent address/connectivity changes.
+ */
 static void on_ip_acquired(WlanRole_e role, uint32_t address)
 {
     static int s_started = 0;
@@ -1339,6 +1428,17 @@ static void on_ip_acquired(WlanRole_e role, uint32_t address)
 }
 #endif
 
+/**
+ * @brief Initialize network services, try known networks and enter the CLI.
+ * @param args Unused thread argument.
+ * @return NULL if the banner check fails or the command prompt exits.
+ * @note CC35XX initializes cache registers, board, lwIP, UART, logging, datetime
+ *  and TLS hooks, then registers on_ip_acquired(). CC33XX opens its board drivers.
+ *  Tries configured network strings sequentially, stopping on first success;
+ *  failed connection attempts do not prevent entering the CLI. Most startup
+ *  return codes are ignored. CC33XX cleanup closes board drivers/completions;
+ *  this function does not shut down the Tuya tasks or CC35XX services.
+ */
 void *network_terminal_entry(void *args)
 {
 #ifdef CC33XX
@@ -1462,6 +1562,11 @@ void *network_terminal_entry(void *args)
 
 
 #ifdef CC35XX
+/**
+ * @brief POSIX thread entry that invokes network_terminal_entry().
+ * @param args Unused thread argument.
+ * @return NULL when network_terminal_entry() returns.
+ */
 void *mainThread(void *args)
 {
     network_terminal_entry(NULL);
